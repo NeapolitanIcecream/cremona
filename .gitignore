@@ -1,0 +1,11 @@
+.DS_Store
+.coverage
+.mypy_cache/
+.pyright/
+.pytest_cache/
+.ruff_cache/
+.venv/
+__pycache__/
+build/
+dist/
+output/

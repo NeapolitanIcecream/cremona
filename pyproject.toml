@@ -1,0 +1,93 @@
+[project]
+name = "cremona"
+version = "0.1.0"
+description = "Proactive refactoring audit for Python repositories."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "complexipy>=5.2.0",
+    "lizard>=1.21.3",
+    "ruff>=0.15.2",
+    "vulture>=2.16",
+]
+
+[project.scripts]
+cremona = "cremona.cli:main"
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.408",
+    "pytest>=9.0.2",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.cremona]
+profile = "generic-python"
+targets = ["src", "tests"]
+exclude = [
+    ".git",
+    ".venv",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".pyright",
+    "*/__pycache__/*",
+]
+out_dir = "output/refactor-audit"
+baseline = "quality/refactor-baseline.json"
+
+[tool.cremona.ruff]
+warning_min = 11
+warning_max = 15
+high_min = 16
+high_max = 24
+critical_min = 25
+
+[tool.cremona.lizard]
+ccn_warning_min = 15
+ccn_warning_max = 19
+ccn_high_min = 20
+ccn_high_max = 29
+ccn_critical_min = 30
+nloc_warning_min = 80
+nloc_warning_max = 119
+nloc_high_min = 120
+nloc_high_max = 149
+nloc_critical_min = 150
+parameter_warning_min = 6
+parameter_warning_max = 7
+parameter_high_min = 8
+parameter_high_max = 8
+parameter_critical_min = 9
+
+[tool.cremona.complexipy]
+warning_min = 16
+warning_max = 29
+high_min = 30
+high_max = 49
+critical_min = 50
+
+[tool.cremona.vulture]
+review_candidate_min = 60
+high_confidence_candidate_min = 80
+
+[tool.cremona.history]
+lookback_days = 180
+min_shared_commits = 3
+coupling_ignore_commit_file_count = 25
+
+[tool.cremona.coverage]
+coverage_json = ""
+
+[build-system]
+requires = ["uv_build>=0.10.4,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.uv]
+package = true
+
+[tool.uv.build-backend]
+module-name = "cremona"
+module-root = "src"
