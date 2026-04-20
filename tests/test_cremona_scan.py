@@ -1677,6 +1677,100 @@ def unused_helper() -> str:
     assert payload["dead_code_candidates"]
 
 
+def test_refactor_audit_cli_bootstraps_baseline_from_repo_config(tmp_path: Path) -> None:
+    fixture_root = tmp_path / "fixture_project"
+    fixture_root.mkdir()
+    source_dir = fixture_root / "src"
+    source_dir.mkdir()
+    tests_dir = fixture_root / "tests"
+    tests_dir.mkdir()
+    (source_dir / "hotspot.py").write_text(
+        """
+from __future__ import annotations
+
+
+def branchy(a: bool, b: bool, c: bool, d: bool, e: bool, f: bool) -> int:
+    total = 0
+    if a:
+        total += 1
+    if b:
+        total += 1
+    if c:
+        total += 1
+    if d:
+        total += 1
+    if e:
+        total += 1
+    if f:
+        total += 1
+    if a and b:
+        total += 1
+    if c and d:
+        total += 1
+    if e and f:
+        total += 1
+    if a or c:
+        total += 1
+    if b or d:
+        total += 1
+    if e or a:
+        total += 1
+    return total
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (tests_dir / "test_placeholder.py").write_text(
+        """
+def test_placeholder() -> None:
+    assert True
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (fixture_root / "pyproject.toml").write_text(
+        """
+[tool.cremona]
+targets = ["src", "tests"]
+out_dir = "output/refactor-audit"
+baseline = "quality/refactor-baseline.json"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "cremona.cli",
+            "scan",
+            "--update-baseline",
+        ],
+        cwd=fixture_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+
+    report_json = fixture_root / "output" / "refactor-audit" / "report.json"
+    baseline_path = fixture_root / "quality" / "refactor-baseline.json"
+    assert report_json.exists()
+    assert baseline_path.exists()
+
+    report = json.loads(report_json.read_text(encoding="utf-8"))
+    assert report["scope"]["requested_targets"] == ["src", "tests"]
+    assert report["scope"]["file_count"] == 2
+
+    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    assert baseline["scope"]["requested_targets"] == ["src", "tests"]
+    assert baseline["scope"]["file_count"] == 2
+    assert baseline["baseline_diff"]["baseline_available"] is False
+    assert baseline["baseline_diff"]["has_regressions"] is False
+
+
 def test_refactor_audit_cli_rejects_partial_baseline_init(tmp_path: Path) -> None:
     fixture_root = tmp_path / "fixture_project"
     fixture_root.mkdir()

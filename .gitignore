@@ -1,5 +1,6 @@
 .DS_Store
 .coverage
+coverage.json
 .mypy_cache/
 .pyright/
 .pytest_cache/

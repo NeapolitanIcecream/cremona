@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cremona Refactor Audit"
+  short_description: "Run evidence-driven refactor audits with Cremona"
+  default_prompt: "Use $cremona-proactive-refactor-audit to audit this Python repo and rank the next refactor targets."

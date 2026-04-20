@@ -16,6 +16,7 @@ cremona = "cremona.cli:main"
 
 [dependency-groups]
 dev = [
+    "coverage>=7.0",
     "pyright>=1.1.408",
     "pytest>=9.0.2",
 ]
@@ -23,6 +24,10 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.coverage.run]
+branch = true
+source = ["src", "tests"]
 
 [tool.cremona]
 profile = "generic-python"

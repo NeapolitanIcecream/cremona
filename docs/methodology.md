@@ -14,6 +14,22 @@ Use Cremona when you need a low-ambiguity answer to two questions:
 4. Read `report.md` first for the repo verdict and routing queue.
 5. Read `report.json` when you need symbol-level evidence or baseline details.
 
+## Bootstrap a baseline
+
+When you adopt Cremona on a repository for the first time:
+
+1. Run `cremona scan --update-baseline` on the full configured scope.
+2. Commit `quality/refactor-baseline.json`.
+3. In CI, generate `coverage.json` from the test run and pass it to
+   `cremona scan --coverage-json coverage.json --fail-on-regression`.
+
+That keeps regressions gated against a committed baseline while preserving the
+coverage signal used in routing.
+
+If `coverage.json` omits files that were not executed, configure coverage
+source roots up front so those files still appear with measured line or branch
+data instead of `unknown`.
+
 ## Interpretation rules
 
 - `ruff` C901 is the early warning signal for control-flow growth.
@@ -33,6 +49,6 @@ Use Cremona when you need a low-ambiguity answer to two questions:
 
 - Behavior changes still require tests.
 - Structural refactors still need regression coverage to stay green.
+- Keep the committed baseline under version control and refresh it only after
+  debt was actually reduced or the schema changed.
 - Do not raise thresholds just to match the current debt level.
-- Update a baseline only after debt was genuinely reduced or the old baseline
-  schema became obsolete.

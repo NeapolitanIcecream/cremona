@@ -1,0 +1,1331 @@
+{
+  "agent_routing_queue": [
+    {
+      "ambiguity_signals": {
+        "compat_request_wrapper": 0,
+        "facade_reexport": 0,
+        "legacy_keyword_hits": 0,
+        "module_package_shadow": 0,
+        "wildcard_reexport": 1
+      },
+      "change_frequency": 2,
+      "churn": 5870,
+      "coverage": {
+        "fraction": 1.0,
+        "mode": "line"
+      },
+      "dead_code_candidate_count": 0,
+      "file": "src/cremona/scan.py",
+      "hotspot_summary": {
+        "monitor": 0,
+        "multi_tool_monitor": 0,
+        "refactor_now": 0,
+        "refactor_soon": 0,
+        "top_symbols": []
+      },
+      "priority_band": "watch",
+      "priority_components": {
+        "ambiguity_score": 4,
+        "change_score": 30,
+        "compatibility_pressure_score": 0,
+        "coupling_score": 0,
+        "coverage_risk_score": 0,
+        "dead_code_score": 0,
+        "static_score": 0
+      },
+      "priority_score": 34,
+      "subsystem": "src",
+      "top_coupled_files": []
+    },
+    {
+      "ambiguity_signals": {
+        "compat_request_wrapper": 0,
+        "facade_reexport": 0,
+        "legacy_keyword_hits": 0,
+        "module_package_shadow": 0,
+        "wildcard_reexport": 0
+      },
+      "change_frequency": 2,
+      "churn": 1752,
+      "coverage": {
+        "fraction": 1.0,
+        "mode": "branch"
+      },
+      "dead_code_candidate_count": 0,
+      "file": "tests/test_cremona_scan.py",
+      "hotspot_summary": {
+        "monitor": 4,
+        "multi_tool_monitor": 0,
+        "refactor_now": 1,
+        "refactor_soon": 0,
+        "top_symbols": [
+          {
+            "classification": "refactor_now",
+            "symbol": "test_build_baseline_snapshot_merges_partial_scope_updates"
+          },
+          {
+            "classification": "monitor",
+            "symbol": "test_refactor_audit_cli_generates_schema_stable_outputs"
+          },
+          {
+            "classification": "monitor",
+            "symbol": "test_refactor_audit_cli_bootstraps_baseline_from_repo_config"
+          },
+          {
+            "classification": "monitor",
+            "symbol": "test_build_baseline_snapshot_accepts_v1_baseline_without_routing_fields"
+          },
+          {
+            "classification": "monitor",
+            "symbol": "test_render_markdown_report_contains_required_sections"
+          }
+        ]
+      },
+      "priority_band": "watch",
+      "priority_components": {
+        "ambiguity_score": 0,
+        "change_score": 23,
+        "compatibility_pressure_score": 0,
+        "coupling_score": 0,
+        "coverage_risk_score": 0,
+        "dead_code_score": 0,
+        "static_score": 9
+      },
+      "priority_score": 32,
+      "subsystem": "tests",
+      "top_coupled_files": []
+    },
+    {
+      "ambiguity_signals": {
+        "compat_request_wrapper": 0,
+        "facade_reexport": 0,
+        "legacy_keyword_hits": 0,
+        "module_package_shadow": 0,
+        "wildcard_reexport": 0
+      },
+      "change_frequency": 1,
+      "churn": 2128,
+      "coverage": {
+        "fraction": 0.787,
+        "mode": "branch"
+      },
+      "dead_code_candidate_count": 1,
+      "file": "src/cremona/core/engine.py",
+      "hotspot_summary": {
+        "monitor": 5,
+        "multi_tool_monitor": 0,
+        "refactor_now": 0,
+        "refactor_soon": 3,
+        "top_symbols": [
+          {
+            "classification": "refactor_soon",
+            "symbol": "build_recommended_queue"
+          },
+          {
+            "classification": "refactor_soon",
+            "symbol": "build_history_summary"
+          },
+          {
+            "classification": "refactor_soon",
+            "symbol": "collect_git_history_summary"
+          },
+          {
+            "classification": "monitor",
+            "symbol": "build_repo_verdict"
+          },
+          {
+            "classification": "monitor",
+            "symbol": "load_coverage_summary"
+          }
+        ]
+      },
+      "priority_band": "watch",
+      "priority_components": {
+        "ambiguity_score": 0,
+        "change_score": 14,
+        "compatibility_pressure_score": 0,
+        "coupling_score": 0,
+        "coverage_risk_score": 2,
+        "dead_code_score": 0,
+        "static_score": 14
+      },
+      "priority_score": 30,
+      "subsystem": "src",
+      "top_coupled_files": []
+    },
+    {
+      "ambiguity_signals": {
+        "compat_request_wrapper": 0,
+        "facade_reexport": 0,
+        "legacy_keyword_hits": 0,
+        "module_package_shadow": 0,
+        "wildcard_reexport": 0
+      },
+      "change_frequency": 2,
+      "churn": 37,
+      "coverage": {
+        "fraction": 1.0,
+        "mode": "line"
+      },
+      "dead_code_candidate_count": 0,
+      "file": "src/cremona/core/__init__.py",
+      "hotspot_summary": {
+        "monitor": 0,
+        "multi_tool_monitor": 0,
+        "refactor_now": 0,
+        "refactor_soon": 0,
+        "top_symbols": []
+      },
+      "priority_band": "watch",
+      "priority_components": {
+        "ambiguity_score": 0,
+        "change_score": 20,
+        "compatibility_pressure_score": 0,
+        "coupling_score": 0,
+        "coverage_risk_score": 0,
+        "dead_code_score": 0,
+        "static_score": 0
+      },
+      "priority_score": 20,
+      "subsystem": "src",
+      "top_coupled_files": []
+    },
+    {
+      "ambiguity_signals": {
+        "compat_request_wrapper": 0,
+        "facade_reexport": 0,
+        "legacy_keyword_hits": 0,
+        "module_package_shadow": 0,
+        "wildcard_reexport": 0
+      },
+      "change_frequency": 2,
+      "churn": 37,
+      "coverage": {
+        "fraction": 1.0,
+        "mode": "line"
+      },
+      "dead_code_candidate_count": 0,
+      "file": "src/cremona/python_tools/__init__.py",
+      "hotspot_summary": {
+        "monitor": 0,
+        "multi_tool_monitor": 0,
+        "refactor_now": 0,
+        "refactor_soon": 0,
+        "top_symbols": []
+      },
+      "priority_band": "watch",
+      "priority_components": {
+        "ambiguity_score": 0,
+        "change_score": 20,
+        "compatibility_pressure_score": 0,
+        "coupling_score": 0,
+        "coverage_risk_score": 0,
+        "dead_code_score": 0,
+        "static_score": 0
+      },
+      "priority_score": 20,
+      "subsystem": "src",
+      "top_coupled_files": []
+    },
+    {
+      "ambiguity_signals": {
+        "compat_request_wrapper": 0,
+        "facade_reexport": 0,
+        "legacy_keyword_hits": 0,
+        "module_package_shadow": 0,
+        "wildcard_reexport": 0
+      },
+      "change_frequency": 1,
+      "churn": 34,
+      "coverage": {
+        "fraction": 0.0,
+        "mode": "branch"
+      },
+      "dead_code_candidate_count": 0,
+      "file": "src/cremona/cli.py",
+      "hotspot_summary": {
+        "monitor": 0,
+        "multi_tool_monitor": 0,
+        "refactor_now": 0,
+        "refactor_soon": 0,
+        "top_symbols": []
+      },
+      "priority_band": "watch",
+      "priority_components": {
+        "ambiguity_score": 0,
+        "change_score": 10,
+        "compatibility_pressure_score": 0,
+        "coupling_score": 0,
+        "coverage_risk_score": 10,
+        "dead_code_score": 0,
+        "static_score": 0
+      },
+      "priority_score": 20,
+      "subsystem": "src",
+      "top_coupled_files": []
+    },
+    {
+      "ambiguity_signals": {
+        "compat_request_wrapper": 0,
+        "facade_reexport": 0,
+        "legacy_keyword_hits": 0,
+        "module_package_shadow": 0,
+        "wildcard_reexport": 0
+      },
+      "change_frequency": 1,
+      "churn": 156,
+      "coverage": {
+        "fraction": 0.7,
+        "mode": "branch"
+      },
+      "dead_code_candidate_count": 0,
+      "file": "src/cremona/core/config.py",
+      "hotspot_summary": {
+        "monitor": 0,
+        "multi_tool_monitor": 0,
+        "refactor_now": 0,
+        "refactor_soon": 1,
+        "top_symbols": [
+          {
+            "classification": "refactor_soon",
+            "symbol": "load_audit_config"
+          }
+        ]
+      },
+      "priority_band": "watch",
+      "priority_components": {
+        "ambiguity_score": 0,
+        "change_score": 10,
+        "compatibility_pressure_score": 0,
+        "coupling_score": 0,
+        "coverage_risk_score": 3,
+        "dead_code_score": 0,
+        "static_score": 3
+      },
+      "priority_score": 16,
+      "subsystem": "src",
+      "top_coupled_files": []
+    },
+    {
+      "ambiguity_signals": {
+        "compat_request_wrapper": 0,
+        "facade_reexport": 0,
+        "legacy_keyword_hits": 0,
+        "module_package_shadow": 0,
+        "wildcard_reexport": 0
+      },
+      "change_frequency": 1,
+      "churn": 499,
+      "coverage": {
+        "fraction": 0.6696,
+        "mode": "branch"
+      },
+      "dead_code_candidate_count": 0,
+      "file": "src/cremona/python_tools/engine.py",
+      "hotspot_summary": {
+        "monitor": 0,
+        "multi_tool_monitor": 0,
+        "refactor_now": 0,
+        "refactor_soon": 0,
+        "top_symbols": []
+      },
+      "priority_band": "watch",
+      "priority_components": {
+        "ambiguity_score": 0,
+        "change_score": 11,
+        "compatibility_pressure_score": 0,
+        "coupling_score": 0,
+        "coverage_risk_score": 3,
+        "dead_code_score": 0,
+        "static_score": 0
+      },
+      "priority_score": 14,
+      "subsystem": "src",
+      "top_coupled_files": []
+    },
+    {
+      "ambiguity_signals": {
+        "compat_request_wrapper": 0,
+        "facade_reexport": 0,
+        "legacy_keyword_hits": 0,
+        "module_package_shadow": 0,
+        "wildcard_reexport": 0
+      },
+      "change_frequency": 1,
+      "churn": 180,
+      "coverage": {
+        "fraction": 0.7059,
+        "mode": "branch"
+      },
+      "dead_code_candidate_count": 1,
+      "file": "src/cremona/profiles/__init__.py",
+      "hotspot_summary": {
+        "monitor": 0,
+        "multi_tool_monitor": 0,
+        "refactor_now": 0,
+        "refactor_soon": 0,
+        "top_symbols": []
+      },
+      "priority_band": "watch",
+      "priority_components": {
+        "ambiguity_score": 0,
+        "change_score": 10,
+        "compatibility_pressure_score": 0,
+        "coupling_score": 0,
+        "coverage_risk_score": 3,
+        "dead_code_score": 0,
+        "static_score": 0
+      },
+      "priority_score": 13,
+      "subsystem": "src",
+      "top_coupled_files": []
+    },
+    {
+      "ambiguity_signals": {
+        "compat_request_wrapper": 0,
+        "facade_reexport": 0,
+        "legacy_keyword_hits": 0,
+        "module_package_shadow": 0,
+        "wildcard_reexport": 0
+      },
+      "change_frequency": 1,
+      "churn": 211,
+      "coverage": {
+        "fraction": 0.8333,
+        "mode": "branch"
+      },
+      "dead_code_candidate_count": 3,
+      "file": "src/cremona/core/models.py",
+      "hotspot_summary": {
+        "monitor": 0,
+        "multi_tool_monitor": 0,
+        "refactor_now": 0,
+        "refactor_soon": 0,
+        "top_symbols": []
+      },
+      "priority_band": "watch",
+      "priority_components": {
+        "ambiguity_score": 0,
+        "change_score": 10,
+        "compatibility_pressure_score": 0,
+        "coupling_score": 0,
+        "coverage_risk_score": 2,
+        "dead_code_score": 0,
+        "static_score": 0
+      },
+      "priority_score": 12,
+      "subsystem": "src",
+      "top_coupled_files": []
+    },
+    {
+      "ambiguity_signals": {
+        "compat_request_wrapper": 0,
+        "facade_reexport": 0,
+        "legacy_keyword_hits": 0,
+        "module_package_shadow": 0,
+        "wildcard_reexport": 0
+      },
+      "change_frequency": 1,
+      "churn": 6,
+      "coverage": {
+        "fraction": 1.0,
+        "mode": "line"
+      },
+      "dead_code_candidate_count": 0,
+      "file": "src/cremona/__init__.py",
+      "hotspot_summary": {
+        "monitor": 0,
+        "multi_tool_monitor": 0,
+        "refactor_now": 0,
+        "refactor_soon": 0,
+        "top_symbols": []
+      },
+      "priority_band": "watch",
+      "priority_components": {
+        "ambiguity_score": 0,
+        "change_score": 10,
+        "compatibility_pressure_score": 0,
+        "coupling_score": 0,
+        "coverage_risk_score": 0,
+        "dead_code_score": 0,
+        "static_score": 0
+      },
+      "priority_score": 10,
+      "subsystem": "src",
+      "top_coupled_files": []
+    }
+  ],
+  "baseline_diff": {
+    "baseline_available": false,
+    "baseline_path": null,
+    "has_regressions": false,
+    "new": [],
+    "resolved": [],
+    "worsened": []
+  },
+  "dead_code_candidates": [
+    {
+      "classification": "review_candidate",
+      "confidence": 60,
+      "file": "src/cremona/core/engine.py",
+      "id": "src/cremona/core/engine.py::variable::load_scan_config",
+      "kind": "variable",
+      "line": 2124,
+      "size": null,
+      "subsystem": "other",
+      "symbol": "load_scan_config"
+    },
+    {
+      "classification": "review_candidate",
+      "confidence": 60,
+      "file": "src/cremona/core/models.py",
+      "id": "src/cremona/core/models.py::variable::AGENT_PRIORITY_BAND_RANK",
+      "kind": "variable",
+      "line": 25,
+      "size": null,
+      "subsystem": "other",
+      "symbol": "AGENT_PRIORITY_BAND_RANK"
+    },
+    {
+      "classification": "review_candidate",
+      "confidence": 60,
+      "file": "src/cremona/core/models.py",
+      "id": "src/cremona/core/models.py::variable::HOTSPOT_CLASSIFICATIONS",
+      "kind": "variable",
+      "line": 14,
+      "size": null,
+      "subsystem": "other",
+      "symbol": "HOTSPOT_CLASSIFICATIONS"
+    },
+    {
+      "classification": "review_candidate",
+      "confidence": 60,
+      "file": "src/cremona/core/models.py",
+      "id": "src/cremona/core/models.py::method::to_dict",
+      "kind": "method",
+      "line": 210,
+      "size": null,
+      "subsystem": "other",
+      "symbol": "to_dict"
+    },
+    {
+      "classification": "review_candidate",
+      "confidence": 60,
+      "file": "src/cremona/profiles/__init__.py",
+      "id": "src/cremona/profiles/__init__.py::function::available_profiles",
+      "kind": "function",
+      "line": 179,
+      "size": null,
+      "subsystem": "other",
+      "symbol": "available_profiles"
+    }
+  ],
+  "generated_at": "2026-04-20T05:28:33.938845+00:00",
+  "history_summary": {
+    "files": {
+      "src/cremona/__init__.py": {
+        "churn": 6,
+        "commit_frequency": 1,
+        "top_coupled_files": []
+      },
+      "src/cremona/cli.py": {
+        "churn": 34,
+        "commit_frequency": 1,
+        "top_coupled_files": []
+      },
+      "src/cremona/core/__init__.py": {
+        "churn": 37,
+        "commit_frequency": 2,
+        "top_coupled_files": []
+      },
+      "src/cremona/core/config.py": {
+        "churn": 156,
+        "commit_frequency": 1,
+        "top_coupled_files": []
+      },
+      "src/cremona/core/engine.py": {
+        "churn": 2128,
+        "commit_frequency": 1,
+        "top_coupled_files": []
+      },
+      "src/cremona/core/models.py": {
+        "churn": 211,
+        "commit_frequency": 1,
+        "top_coupled_files": []
+      },
+      "src/cremona/profiles/__init__.py": {
+        "churn": 180,
+        "commit_frequency": 1,
+        "top_coupled_files": []
+      },
+      "src/cremona/python_tools/__init__.py": {
+        "churn": 37,
+        "commit_frequency": 2,
+        "top_coupled_files": []
+      },
+      "src/cremona/python_tools/engine.py": {
+        "churn": 499,
+        "commit_frequency": 1,
+        "top_coupled_files": []
+      },
+      "src/cremona/scan.py": {
+        "churn": 5870,
+        "commit_frequency": 2,
+        "top_coupled_files": []
+      },
+      "tests/test_cremona_scan.py": {
+        "churn": 1752,
+        "commit_frequency": 2,
+        "top_coupled_files": []
+      }
+    },
+    "lookback_days": 180,
+    "max_churn": 5870,
+    "max_commit_frequency": 2,
+    "status": "available"
+  },
+  "hotspots": [
+    {
+      "classification": "refactor_now",
+      "file": "tests/test_cremona_scan.py",
+      "id": "tests/test_cremona_scan.py::test_build_baseline_snapshot_merges_partial_scope_updates",
+      "line": 1201,
+      "metrics": {
+        "lizard": {
+          "ccn": 3,
+          "length": 254,
+          "nloc": 252,
+          "parameter_count": 0,
+          "token_count": 1057
+        }
+      },
+      "signals": [
+        {
+          "line": 1201,
+          "message": "CCN=3, NLOC=252, parameter_count=0, length=254",
+          "metrics": {
+            "ccn": 3,
+            "length": 254,
+            "nloc": 252,
+            "parameter_count": 0,
+            "token_count": 1057
+          },
+          "severity": "critical",
+          "symbol": "test_build_baseline_snapshot_merges_partial_scope_updates",
+          "tool": "lizard"
+        }
+      ],
+      "subsystem": "tests",
+      "symbol": "test_build_baseline_snapshot_merges_partial_scope_updates",
+      "tool_count": 1,
+      "tools": [
+        "lizard"
+      ]
+    },
+    {
+      "classification": "refactor_soon",
+      "file": "src/cremona/core/engine.py",
+      "id": "src/cremona/core/engine.py::build_recommended_queue",
+      "line": 797,
+      "metrics": {
+        "lizard": {
+          "ccn": 22,
+          "length": 68,
+          "nloc": 67,
+          "parameter_count": 1,
+          "token_count": 355
+        }
+      },
+      "signals": [
+        {
+          "line": 797,
+          "message": "CCN=22, NLOC=67, parameter_count=1, length=68",
+          "metrics": {
+            "ccn": 22,
+            "length": 68,
+            "nloc": 67,
+            "parameter_count": 1,
+            "token_count": 355
+          },
+          "severity": "high",
+          "symbol": "build_recommended_queue",
+          "tool": "lizard"
+        }
+      ],
+      "subsystem": "src",
+      "symbol": "build_recommended_queue",
+      "tool_count": 1,
+      "tools": [
+        "lizard"
+      ]
+    },
+    {
+      "classification": "refactor_soon",
+      "file": "src/cremona/core/engine.py",
+      "id": "src/cremona/core/engine.py::build_history_summary",
+      "line": 265,
+      "metrics": {
+        "lizard": {
+          "ccn": 14,
+          "length": 83,
+          "nloc": 70,
+          "parameter_count": 6,
+          "token_count": 423
+        },
+        "ruff": {
+          "complexity": 13
+        }
+      },
+      "signals": [
+        {
+          "line": 265,
+          "message": "CCN=14, NLOC=70, parameter_count=6, length=83",
+          "metrics": {
+            "ccn": 14,
+            "length": 83,
+            "nloc": 70,
+            "parameter_count": 6,
+            "token_count": 423
+          },
+          "severity": "warning",
+          "symbol": "build_history_summary",
+          "tool": "lizard"
+        },
+        {
+          "line": 265,
+          "message": "`build_history_summary` is too complex (13 > 10)",
+          "metrics": {
+            "complexity": 13
+          },
+          "severity": "warning",
+          "symbol": "build_history_summary",
+          "tool": "ruff"
+        }
+      ],
+      "subsystem": "src",
+      "symbol": "build_history_summary",
+      "tool_count": 2,
+      "tools": [
+        "lizard",
+        "ruff"
+      ]
+    },
+    {
+      "classification": "refactor_soon",
+      "file": "src/cremona/core/config.py",
+      "id": "src/cremona/core/config.py::load_audit_config",
+      "line": 12,
+      "metrics": {
+        "lizard": {
+          "ccn": 9,
+          "length": 126,
+          "nloc": 126,
+          "parameter_count": 1,
+          "token_count": 772
+        }
+      },
+      "signals": [
+        {
+          "line": 12,
+          "message": "CCN=9, NLOC=126, parameter_count=1, length=126",
+          "metrics": {
+            "ccn": 9,
+            "length": 126,
+            "nloc": 126,
+            "parameter_count": 1,
+            "token_count": 772
+          },
+          "severity": "high",
+          "symbol": "load_audit_config",
+          "tool": "lizard"
+        }
+      ],
+      "subsystem": "src",
+      "symbol": "load_audit_config",
+      "tool_count": 1,
+      "tools": [
+        "lizard"
+      ]
+    },
+    {
+      "classification": "refactor_soon",
+      "file": "src/cremona/core/engine.py",
+      "id": "src/cremona/core/engine.py::collect_git_history_summary",
+      "line": 350,
+      "metrics": {
+        "lizard": {
+          "ccn": 5,
+          "length": 51,
+          "nloc": 51,
+          "parameter_count": 8,
+          "token_count": 230
+        }
+      },
+      "signals": [
+        {
+          "line": 350,
+          "message": "CCN=5, NLOC=51, parameter_count=8, length=51",
+          "metrics": {
+            "ccn": 5,
+            "length": 51,
+            "nloc": 51,
+            "parameter_count": 8,
+            "token_count": 230
+          },
+          "severity": "high",
+          "symbol": "collect_git_history_summary",
+          "tool": "lizard"
+        }
+      ],
+      "subsystem": "src",
+      "symbol": "collect_git_history_summary",
+      "tool_count": 1,
+      "tools": [
+        "lizard"
+      ]
+    },
+    {
+      "classification": "monitor",
+      "file": "src/cremona/core/engine.py",
+      "id": "src/cremona/core/engine.py::build_repo_verdict",
+      "line": 1164,
+      "metrics": {
+        "lizard": {
+          "ccn": 17,
+          "length": 65,
+          "nloc": 65,
+          "parameter_count": 4,
+          "token_count": 311
+        }
+      },
+      "signals": [
+        {
+          "line": 1164,
+          "message": "CCN=17, NLOC=65, parameter_count=4, length=65",
+          "metrics": {
+            "ccn": 17,
+            "length": 65,
+            "nloc": 65,
+            "parameter_count": 4,
+            "token_count": 311
+          },
+          "severity": "warning",
+          "symbol": "build_repo_verdict",
+          "tool": "lizard"
+        }
+      ],
+      "subsystem": "src",
+      "symbol": "build_repo_verdict",
+      "tool_count": 1,
+      "tools": [
+        "lizard"
+      ]
+    },
+    {
+      "classification": "monitor",
+      "file": "src/cremona/core/engine.py",
+      "id": "src/cremona/core/engine.py::load_coverage_summary",
+      "line": 410,
+      "metrics": {
+        "lizard": {
+          "ccn": 16,
+          "length": 67,
+          "nloc": 67,
+          "parameter_count": 3,
+          "token_count": 335
+        }
+      },
+      "signals": [
+        {
+          "line": 410,
+          "message": "CCN=16, NLOC=67, parameter_count=3, length=67",
+          "metrics": {
+            "ccn": 16,
+            "length": 67,
+            "nloc": 67,
+            "parameter_count": 3,
+            "token_count": 335
+          },
+          "severity": "warning",
+          "symbol": "load_coverage_summary",
+          "tool": "lizard"
+        }
+      ],
+      "subsystem": "src",
+      "symbol": "load_coverage_summary",
+      "tool_count": 1,
+      "tools": [
+        "lizard"
+      ]
+    },
+    {
+      "classification": "monitor",
+      "file": "src/cremona/core/engine.py",
+      "id": "src/cremona/core/engine.py::build_baseline_snapshot",
+      "line": 1495,
+      "metrics": {
+        "lizard": {
+          "ccn": 14,
+          "length": 100,
+          "nloc": 100,
+          "parameter_count": 3,
+          "token_count": 591
+        }
+      },
+      "signals": [
+        {
+          "line": 1495,
+          "message": "CCN=14, NLOC=100, parameter_count=3, length=100",
+          "metrics": {
+            "ccn": 14,
+            "length": 100,
+            "nloc": 100,
+            "parameter_count": 3,
+            "token_count": 591
+          },
+          "severity": "warning",
+          "symbol": "build_baseline_snapshot",
+          "tool": "lizard"
+        }
+      ],
+      "subsystem": "src",
+      "symbol": "build_baseline_snapshot",
+      "tool_count": 1,
+      "tools": [
+        "lizard"
+      ]
+    },
+    {
+      "classification": "monitor",
+      "file": "src/cremona/core/engine.py",
+      "id": "src/cremona/core/engine.py::build_agent_routing_queue",
+      "line": 739,
+      "metrics": {
+        "lizard": {
+          "ccn": 4,
+          "length": 46,
+          "nloc": 45,
+          "parameter_count": 6,
+          "token_count": 333
+        }
+      },
+      "signals": [
+        {
+          "line": 739,
+          "message": "CCN=4, NLOC=45, parameter_count=6, length=46",
+          "metrics": {
+            "ccn": 4,
+            "length": 46,
+            "nloc": 45,
+            "parameter_count": 6,
+            "token_count": 333
+          },
+          "severity": "warning",
+          "symbol": "build_agent_routing_queue",
+          "tool": "lizard"
+        }
+      ],
+      "subsystem": "src",
+      "symbol": "build_agent_routing_queue",
+      "tool_count": 1,
+      "tools": [
+        "lizard"
+      ]
+    },
+    {
+      "classification": "monitor",
+      "file": "src/cremona/core/engine.py",
+      "id": "src/cremona/core/engine.py::run_refactor_audit",
+      "line": 1893,
+      "metrics": {
+        "lizard": {
+          "ccn": 3,
+          "length": 92,
+          "nloc": 92,
+          "parameter_count": 2,
+          "token_count": 432
+        }
+      },
+      "signals": [
+        {
+          "line": 1893,
+          "message": "CCN=3, NLOC=92, parameter_count=2, length=92",
+          "metrics": {
+            "ccn": 3,
+            "length": 92,
+            "nloc": 92,
+            "parameter_count": 2,
+            "token_count": 432
+          },
+          "severity": "warning",
+          "symbol": "run_refactor_audit",
+          "tool": "lizard"
+        }
+      ],
+      "subsystem": "src",
+      "symbol": "run_refactor_audit",
+      "tool_count": 1,
+      "tools": [
+        "lizard"
+      ]
+    },
+    {
+      "classification": "monitor",
+      "file": "tests/test_cremona_scan.py",
+      "id": "tests/test_cremona_scan.py::test_refactor_audit_cli_generates_schema_stable_outputs",
+      "line": 1580,
+      "metrics": {
+        "lizard": {
+          "ccn": 2,
+          "length": 98,
+          "nloc": 94,
+          "parameter_count": 1,
+          "token_count": 286
+        }
+      },
+      "signals": [
+        {
+          "line": 1580,
+          "message": "CCN=2, NLOC=94, parameter_count=1, length=98",
+          "metrics": {
+            "ccn": 2,
+            "length": 98,
+            "nloc": 94,
+            "parameter_count": 1,
+            "token_count": 286
+          },
+          "severity": "warning",
+          "symbol": "test_refactor_audit_cli_generates_schema_stable_outputs",
+          "tool": "lizard"
+        }
+      ],
+      "subsystem": "tests",
+      "symbol": "test_refactor_audit_cli_generates_schema_stable_outputs",
+      "tool_count": 1,
+      "tools": [
+        "lizard"
+      ]
+    },
+    {
+      "classification": "monitor",
+      "file": "tests/test_cremona_scan.py",
+      "id": "tests/test_cremona_scan.py::test_refactor_audit_cli_bootstraps_baseline_from_repo_config",
+      "line": 1680,
+      "metrics": {
+        "lizard": {
+          "ccn": 2,
+          "length": 92,
+          "nloc": 87,
+          "parameter_count": 1,
+          "token_count": 280
+        }
+      },
+      "signals": [
+        {
+          "line": 1680,
+          "message": "CCN=2, NLOC=87, parameter_count=1, length=92",
+          "metrics": {
+            "ccn": 2,
+            "length": 92,
+            "nloc": 87,
+            "parameter_count": 1,
+            "token_count": 280
+          },
+          "severity": "warning",
+          "symbol": "test_refactor_audit_cli_bootstraps_baseline_from_repo_config",
+          "tool": "lizard"
+        }
+      ],
+      "subsystem": "tests",
+      "symbol": "test_refactor_audit_cli_bootstraps_baseline_from_repo_config",
+      "tool_count": 1,
+      "tools": [
+        "lizard"
+      ]
+    },
+    {
+      "classification": "monitor",
+      "file": "tests/test_cremona_scan.py",
+      "id": "tests/test_cremona_scan.py::test_build_baseline_snapshot_accepts_v1_baseline_without_routing_fields",
+      "line": 1457,
+      "metrics": {
+        "lizard": {
+          "ccn": 1,
+          "length": 121,
+          "nloc": 119,
+          "parameter_count": 0,
+          "token_count": 512
+        }
+      },
+      "signals": [
+        {
+          "line": 1457,
+          "message": "CCN=1, NLOC=119, parameter_count=0, length=121",
+          "metrics": {
+            "ccn": 1,
+            "length": 121,
+            "nloc": 119,
+            "parameter_count": 0,
+            "token_count": 512
+          },
+          "severity": "warning",
+          "symbol": "test_build_baseline_snapshot_accepts_v1_baseline_without_routing_fields",
+          "tool": "lizard"
+        }
+      ],
+      "subsystem": "tests",
+      "symbol": "test_build_baseline_snapshot_accepts_v1_baseline_without_routing_fields",
+      "tool_count": 1,
+      "tools": [
+        "lizard"
+      ]
+    },
+    {
+      "classification": "monitor",
+      "file": "tests/test_cremona_scan.py",
+      "id": "tests/test_cremona_scan.py::test_render_markdown_report_contains_required_sections",
+      "line": 1022,
+      "metrics": {
+        "lizard": {
+          "ccn": 1,
+          "length": 106,
+          "nloc": 104,
+          "parameter_count": 0,
+          "token_count": 433
+        }
+      },
+      "signals": [
+        {
+          "line": 1022,
+          "message": "CCN=1, NLOC=104, parameter_count=0, length=106",
+          "metrics": {
+            "ccn": 1,
+            "length": 106,
+            "nloc": 104,
+            "parameter_count": 0,
+            "token_count": 433
+          },
+          "severity": "warning",
+          "symbol": "test_render_markdown_report_contains_required_sections",
+          "tool": "lizard"
+        }
+      ],
+      "subsystem": "tests",
+      "symbol": "test_render_markdown_report_contains_required_sections",
+      "tool_count": 1,
+      "tools": [
+        "lizard"
+      ]
+    }
+  ],
+  "recommended_queue": [
+    {
+      "investigate_now": 0,
+      "investigate_soon": 0,
+      "subsystem": "src",
+      "top_targets": [
+        {
+          "file": "src/cremona/scan.py",
+          "priority_band": "watch",
+          "priority_score": 34
+        },
+        {
+          "file": "src/cremona/core/engine.py",
+          "priority_band": "watch",
+          "priority_score": 30
+        },
+        {
+          "file": "src/cremona/core/__init__.py",
+          "priority_band": "watch",
+          "priority_score": 20
+        },
+        {
+          "file": "src/cremona/python_tools/__init__.py",
+          "priority_band": "watch",
+          "priority_score": 20
+        },
+        {
+          "file": "src/cremona/cli.py",
+          "priority_band": "watch",
+          "priority_score": 20
+        }
+      ],
+      "watch": 10
+    },
+    {
+      "investigate_now": 0,
+      "investigate_soon": 0,
+      "subsystem": "tests",
+      "top_targets": [
+        {
+          "file": "tests/test_cremona_scan.py",
+          "priority_band": "watch",
+          "priority_score": 32
+        }
+      ],
+      "watch": 1
+    },
+    {
+      "investigate_now": 0,
+      "investigate_soon": 0,
+      "subsystem": "scripts",
+      "top_targets": [],
+      "watch": 0
+    },
+    {
+      "investigate_now": 0,
+      "investigate_soon": 0,
+      "subsystem": "docs",
+      "top_targets": [],
+      "watch": 0
+    },
+    {
+      "investigate_now": 0,
+      "investigate_soon": 0,
+      "subsystem": "other",
+      "top_targets": [],
+      "watch": 0
+    }
+  ],
+  "recommended_refactor_queue": [
+    {
+      "investigate_now": 0,
+      "investigate_soon": 0,
+      "subsystem": "src",
+      "top_targets": [
+        {
+          "file": "src/cremona/scan.py",
+          "priority_band": "watch",
+          "priority_score": 34
+        },
+        {
+          "file": "src/cremona/core/engine.py",
+          "priority_band": "watch",
+          "priority_score": 30
+        },
+        {
+          "file": "src/cremona/core/__init__.py",
+          "priority_band": "watch",
+          "priority_score": 20
+        },
+        {
+          "file": "src/cremona/python_tools/__init__.py",
+          "priority_band": "watch",
+          "priority_score": 20
+        },
+        {
+          "file": "src/cremona/cli.py",
+          "priority_band": "watch",
+          "priority_score": 20
+        }
+      ],
+      "watch": 10
+    },
+    {
+      "investigate_now": 0,
+      "investigate_soon": 0,
+      "subsystem": "tests",
+      "top_targets": [
+        {
+          "file": "tests/test_cremona_scan.py",
+          "priority_band": "watch",
+          "priority_score": 32
+        }
+      ],
+      "watch": 1
+    },
+    {
+      "investigate_now": 0,
+      "investigate_soon": 0,
+      "subsystem": "scripts",
+      "top_targets": [],
+      "watch": 0
+    },
+    {
+      "investigate_now": 0,
+      "investigate_soon": 0,
+      "subsystem": "docs",
+      "top_targets": [],
+      "watch": 0
+    },
+    {
+      "investigate_now": 0,
+      "investigate_soon": 0,
+      "subsystem": "other",
+      "top_targets": [],
+      "watch": 0
+    }
+  ],
+  "repo_verdict": {
+    "debt_status": "strained",
+    "has_regressions": false,
+    "investigate_now_total": 0,
+    "investigate_soon_total": 0,
+    "missing_signals": [],
+    "refactor_now_total": 1,
+    "routing_pressure": "watch_only",
+    "signal_health": "full",
+    "status": "strained",
+    "summary": "Existing structural debt remains, but the current scope did not regress."
+  },
+  "schema_version": 2,
+  "scope": {
+    "file_count": 11,
+    "files": [
+      "src/cremona/__init__.py",
+      "src/cremona/cli.py",
+      "src/cremona/core/__init__.py",
+      "src/cremona/core/config.py",
+      "src/cremona/core/engine.py",
+      "src/cremona/core/models.py",
+      "src/cremona/profiles/__init__.py",
+      "src/cremona/python_tools/__init__.py",
+      "src/cremona/python_tools/engine.py",
+      "src/cremona/scan.py",
+      "tests/test_cremona_scan.py"
+    ],
+    "repo_root": "/Users/chenmohan/gits/cremona",
+    "requested_targets": [
+      "src",
+      "tests"
+    ]
+  },
+  "summary": {
+    "agent_routing_queue_total": 11,
+    "dead_code_candidates_total": 5,
+    "dead_code_high_confidence_total": 0,
+    "files_scanned": 11,
+    "hotspots_total": 14,
+    "investigate_now_total": 0,
+    "investigate_soon_total": 0,
+    "monitor_total": 9,
+    "refactor_now_total": 1,
+    "refactor_soon_total": 4,
+    "watch_total": 11
+  },
+  "tool_summaries": {
+    "complexipy": {
+      "critical": 0,
+      "findings_total": 0,
+      "high": 0,
+      "warning": 0
+    },
+    "lizard": {
+      "critical": 1,
+      "findings_total": 14,
+      "high": 3,
+      "warning": 10
+    },
+    "ruff": {
+      "critical": 0,
+      "findings_total": 1,
+      "high": 0,
+      "warning": 1
+    },
+    "vulture": {
+      "findings_total": 5,
+      "high_confidence_candidate": 0,
+      "review_candidate": 5
+    }
+  }
+}
