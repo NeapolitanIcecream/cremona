@@ -247,6 +247,14 @@ class Profile:
         return (total, triggered)
 
 
+@dataclass(frozen=True)
+class QueueOrderContext:
+    base_profile: Profile
+    classifier_kind: str
+    subsystem_rules: tuple[SubsystemRule, ...]
+    fallback_subsystem: str
+
+
 GENERIC_PYTHON_PROFILE = Profile(
     name="generic-python",
     queue_order=("src", "tests", "scripts", "docs", "other"),
@@ -322,13 +330,16 @@ def _compile_custom_profile(name: str, raw_profile: Any) -> Profile:
     classifier_kind = (
         "rules" if subsystem_rules else base_profile.classifier_kind
     )
-    queue_order = _compile_queue_order(
-        name=name,
-        raw_profile=raw_profile,
+    queue_order_context = QueueOrderContext(
         base_profile=base_profile,
         classifier_kind=classifier_kind,
         subsystem_rules=subsystem_rules,
         fallback_subsystem=fallback_subsystem,
+    )
+    queue_order = _compile_queue_order(
+        name=name,
+        raw_profile=raw_profile,
+        context=queue_order_context,
     )
     routing_signal_definitions = _compile_routing_signal_definitions(
         name=name,
@@ -402,36 +413,65 @@ def _compile_queue_order(
     *,
     name: str,
     raw_profile: Mapping[str, Any],
-    base_profile: Profile,
-    classifier_kind: str,
-    subsystem_rules: tuple[SubsystemRule, ...],
-    fallback_subsystem: str,
+    context: QueueOrderContext,
 ) -> tuple[str, ...]:
-    if classifier_kind == base_profile.classifier_kind and not subsystem_rules:
-        allowed = set(base_profile.queue_order)
-        default_order = list(base_profile.queue_order)
-        trailing = list(base_profile.queue_order)
-    else:
-        allowed = {item.name for item in subsystem_rules}
-        allowed.add(fallback_subsystem)
-        default_order = [*[item.name for item in subsystem_rules], fallback_subsystem]
-        trailing = [fallback_subsystem]
+    allowed, default_order, trailing = _queue_order_context(
+        context=context,
+    )
     raw_queue_order = raw_profile.get("queue_order")
     if raw_queue_order in (None, ""):
         return tuple(default_order)
     if not isinstance(raw_queue_order, list) or not raw_queue_order:
         raise ValueError(f"tool.cremona.profiles.{name}.queue_order must be a non-empty list.")
     queue_order = [str(item) for item in raw_queue_order]
+    _validate_queue_order(name=name, queue_order=queue_order, allowed=allowed)
+    return tuple(_append_missing_queue_order_items(queue_order=queue_order, trailing=trailing))
+
+
+def _queue_order_context(
+    *,
+    context: QueueOrderContext,
+) -> tuple[set[str], list[str], list[str]]:
+    if (
+        context.classifier_kind == context.base_profile.classifier_kind
+        and not context.subsystem_rules
+    ):
+        base_queue_order = list(context.base_profile.queue_order)
+        return (set(base_queue_order), base_queue_order, list(base_queue_order))
+    allowed = {item.name for item in context.subsystem_rules}
+    allowed.add(context.fallback_subsystem)
+    return (
+        allowed,
+        [*[item.name for item in context.subsystem_rules], context.fallback_subsystem],
+        [context.fallback_subsystem],
+    )
+
+
+def _validate_queue_order(
+    *,
+    name: str,
+    queue_order: list[str],
+    allowed: set[str],
+) -> None:
     invalid = [item for item in queue_order if item not in allowed]
-    if invalid:
-        raise ValueError(
-            f"tool.cremona.profiles.{name}.queue_order references unknown subsystems: "
-            + ", ".join(repr(item) for item in invalid)
-        )
+    if not invalid:
+        return
+    raise ValueError(
+        f"tool.cremona.profiles.{name}.queue_order references unknown subsystems: "
+        + ", ".join(repr(item) for item in invalid)
+    )
+
+
+def _append_missing_queue_order_items(
+    *,
+    queue_order: list[str],
+    trailing: list[str],
+) -> list[str]:
+    normalized = list(queue_order)
     for trailing_item in trailing:
-        if trailing_item not in queue_order:
-            queue_order.append(trailing_item)
-    return tuple(queue_order)
+        if trailing_item not in normalized:
+            normalized.append(trailing_item)
+    return normalized
 
 
 def _compile_routing_signal_definitions(
