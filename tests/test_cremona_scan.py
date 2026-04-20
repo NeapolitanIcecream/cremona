@@ -474,6 +474,38 @@ def entrypoint() -> None:
     assert profile.dead_code_ignored_decorators == frozenset()
 
 
+def test_custom_profile_without_subsystem_rules_keeps_generic_classifier(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[tool.cremona]
+profile = "workflow-app"
+
+[tool.cremona.profiles.workflow-app]
+base = "generic-python"
+
+[[tool.cremona.profiles.workflow-app.signals]]
+name = "kwargs_bridge_hits"
+kind = "regex_count"
+pattern = "\\blegacy_[A-Za-z0-9_]*\\b"
+points_per = 10
+max_points = 6
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config = audit.load_audit_config(repo_root=tmp_path)
+    profile = audit.get_profile("workflow-app", config.profile_registry)
+
+    assert profile.classifier_kind == audit.DEFAULT_PROFILE.classifier_kind
+    assert profile.queue_order == audit.DEFAULT_PROFILE.queue_order
+    assert profile.classify_subsystem("src/pkg/example.py") == "src"
+    assert profile.classify_subsystem("tests/test_example.py") == "tests"
+    assert profile.classify_subsystem("docs/guide.md") == "docs"
+
+
 def test_parse_lizard_findings_keeps_same_leaf_methods_separate(tmp_path: Path) -> None:
     path = tmp_path / "pkg" / "mod.py"
     path.parent.mkdir(parents=True, exist_ok=True)
