@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Literal
 
 import cremona.scan as audit
+from cremona.core import engine as core_engine
 
 CONFIG = audit.load_audit_config(repo_root=Path(__file__).resolve().parents[1])
 audit._set_active_profile(audit.get_profile("recoleta"))
@@ -354,7 +355,7 @@ def test_build_history_summary_marks_git_unavailable(monkeypatch) -> None:
     def _fail(**_: object) -> None:
         raise RuntimeError("Command not found: git")
 
-    monkeypatch.setattr(audit, "run_command", _fail)
+    monkeypatch.setattr(core_engine, "run_command", _fail)
 
     summary = audit.collect_git_history_summary(
         repo_root=Path.cwd(),
@@ -435,7 +436,7 @@ def test_history_collection_inputs_include_explicit_scope_files_outside_default_
         config=CONFIG,
     )
 
-    targets, tracked_files = audit._history_collection_inputs(
+    targets, tracked_files = core_engine._history_collection_inputs(
         request=request,
         scope_state=scope_state,
     )
@@ -486,7 +487,7 @@ def test_coerce_refactor_audit_run_request_uses_config_defaults_for_legacy_kwarg
         coverage=audit.CoverageConfig(coverage_json=tmp_path / "coverage.json"),
     )
 
-    request = audit._coerce_refactor_audit_run_request(
+    request = core_engine._coerce_refactor_audit_run_request(
         legacy_kwargs={
             "scope_targets": ["src/cremona/scan.py"],
             "out_dir": tmp_path / "out",
@@ -560,6 +561,87 @@ def test_generic_python_profile_keeps_recoleta_rules_out_of_core() -> None:
 def test_recoleta_profile_preserves_recoleta_specific_subsystem_mapping() -> None:
     with _use_profile("recoleta"):
         assert audit.infer_subsystem("recoleta/cli.py") == "cli"
+
+
+def test_generic_python_profile_scans_non_recoleta_fixture_end_to_end(
+    tmp_path: Path,
+) -> None:
+    fixture_root = tmp_path / "generic_project"
+    src_dir = fixture_root / "src" / "demo"
+    tests_dir = fixture_root / "tests"
+    src_dir.mkdir(parents=True)
+    tests_dir.mkdir(parents=True)
+    (fixture_root / "pyproject.toml").write_text(
+        """
+[tool.cremona]
+profile = "generic-python"
+targets = ["src", "tests"]
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (src_dir / "__init__.py").write_text("", encoding="utf-8")
+    (src_dir / "hotspot.py").write_text(
+        """
+from __future__ import annotations
+
+
+def branchy(a: bool, b: bool, c: bool, d: bool, e: bool, f: bool) -> int:
+    total = 0
+    if a:
+        total += 1
+    if b:
+        total += 1
+    if c:
+        total += 1
+    if d:
+        total += 1
+    if e:
+        total += 1
+    if f:
+        total += 1
+    if a and b:
+        total += 1
+    if c and d:
+        total += 1
+    if e and f:
+        total += 1
+    if a or c:
+        total += 1
+    if b or d:
+        total += 1
+    if e or a:
+        total += 1
+    return total
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (tests_dir / "test_smoke.py").write_text(
+        """
+def test_smoke() -> None:
+    assert True
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = audit.run_scan(
+        audit.ScanRequest(
+            scope_targets=[str(fixture_root / "src"), str(fixture_root / "tests")],
+            out_dir=tmp_path / "audit-out",
+            baseline_path=tmp_path / "baseline.json",
+            profile="generic-python",
+        )
+    )
+
+    subsystems = {item["subsystem"] for item in report["agent_routing_queue"]}
+    assert report.exit_code == 0
+    assert subsystems <= {"src", "tests"}
+    assert "src" in subsystems
+    assert not (subsystems & {"cli", "pipeline", "storage", "rag", "site/render"})
+    assert any(group["subsystem"] == "src" for group in report["recommended_queue"])
+    assert (tmp_path / "audit-out" / "report.json").exists()
 
 
 def test_build_agent_routing_queue_prioritizes_high_churn_ambiguous_file() -> None:

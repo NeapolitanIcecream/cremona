@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from ..scan import (
+from .engine import (
     ScopeLookup,
-    aggregate_hotspots,
     build_symbol_index,
     collect_python_files,
     normalize_symbol_key,
@@ -18,7 +17,6 @@ from ..scan import (
 
 __all__ = [
     "ScopeLookup",
-    "aggregate_hotspots",
     "build_symbol_index",
     "collect_python_files",
     "normalize_symbol_key",
