@@ -1808,11 +1808,21 @@ def _require_supported_baseline_report(baseline_report: dict[str, Any]) -> None:
         )
 
 
-def _load_baseline_report(baseline_path: Path) -> dict[str, Any] | None:
+def _baseline_report_is_supported(baseline_report: dict[str, Any]) -> bool:
+    schema_version = optional_int(baseline_report.get("schema_version"))
+    return schema_version is not None and schema_version >= SCHEMA_VERSION
+
+
+def _load_baseline_report(
+    baseline_path: Path,
+    *,
+    require_supported_schema: bool = True,
+) -> dict[str, Any] | None:
     if not baseline_path.exists():
         return None
     baseline_report = json.loads(baseline_path.read_text(encoding="utf-8"))
-    _require_supported_baseline_report(baseline_report)
+    if require_supported_schema:
+        _require_supported_baseline_report(baseline_report)
     baseline_report["_baseline_path"] = str(baseline_path)
     return baseline_report
 
@@ -1936,7 +1946,16 @@ def run_refactor_audit(
             coverage_summary=coverage_summary,
             routing_index=routing_index,
         )
-        baseline_report = _load_baseline_report(resolved_request.baseline_path)
+        baseline_report = _load_baseline_report(
+            resolved_request.baseline_path,
+            require_supported_schema=not (
+                resolved_request.update_baseline and not scope_state.is_partial_scope
+            ),
+        )
+        if baseline_report is not None and not _baseline_report_is_supported(
+            baseline_report
+        ):
+            baseline_report = None
         baseline_diff = build_baseline_diff(
             current_hotspots=hotspots,
             current_dead_code_candidates=tool_run.dead_code_candidates,

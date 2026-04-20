@@ -40,7 +40,11 @@ class ScopeLookup:
         qualified_names_by_path_and_leaf: dict[str, dict[str, tuple[str, ...]]] = {}
         qualified_names_by_path_and_line: dict[str, dict[int, str]] = {}
         vulture_ignored_lines_by_path: dict[str, frozenset[int]] = {}
-        active_ignored = ignored_decorators or DEFAULT_DEAD_CODE_IGNORED_DECORATORS
+        active_ignored = (
+            DEFAULT_DEAD_CODE_IGNORED_DECORATORS
+            if ignored_decorators is None
+            else ignored_decorators
+        )
         for rel_path in rel_paths:
             grouped[Path(rel_path).name].append(rel_path)
             path = repo_root / rel_path
@@ -154,7 +158,11 @@ def build_symbol_index(
         by_line={},
         vulture_ignored_lines=set(),
     )
-    active_ignored = ignored_decorators or DEFAULT_DEAD_CODE_IGNORED_DECORATORS
+    active_ignored = (
+        DEFAULT_DEAD_CODE_IGNORED_DECORATORS
+        if ignored_decorators is None
+        else ignored_decorators
+    )
 
     def walk(node: ast.AST, prefix: str = "", parent_kind: str | None = None) -> None:
         body = getattr(node, "body", None)

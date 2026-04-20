@@ -421,6 +421,59 @@ def staged_task() -> None:
     assert profile.dead_code_ignored_decorators == frozenset({"workflow_step"})
 
 
+def test_profile_dead_code_ignored_decorators_can_be_explicitly_empty(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[tool.cremona]
+profile = "workflow-app"
+
+[tool.cremona.profiles.workflow-app]
+base = "generic-python"
+fallback_subsystem = "other"
+
+[tool.cremona.profiles.workflow-app.dead_code]
+ignored_decorators = []
+inherit_default_ignored_decorators = false
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    config = audit.load_audit_config(repo_root=tmp_path)
+    profile = audit.get_profile("workflow-app", config.profile_registry)
+
+    path = tmp_path / "pkg" / "cli.py"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        """
+def command(fn):
+    return fn
+
+
+@command
+def entrypoint() -> None:
+    return None
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    lookup = audit.ScopeLookup.from_files(
+        repo_root=tmp_path,
+        files=[path],
+        ignored_decorators=profile.dead_code_ignored_decorators,
+    )
+
+    candidates = audit.parse_vulture_candidates(
+        raw_text="pkg/cli.py:5: unused function 'entrypoint' (60% confidence)\n",
+        lookup=lookup,
+        config=config,
+    )
+
+    assert [candidate["symbol"] for candidate in candidates] == ["entrypoint"]
+    assert profile.dead_code_ignored_decorators == frozenset()
+
+
 def test_parse_lizard_findings_keeps_same_leaf_methods_separate(tmp_path: Path) -> None:
     path = tmp_path / "pkg" / "mod.py"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -2191,6 +2244,86 @@ targets = ["src"]
     assert result.returncode != 0
     assert "Regenerate the baseline" in result.stderr
     assert "schema version" in result.stderr
+
+
+def test_refactor_audit_cli_update_baseline_replaces_legacy_baseline_schema(
+    tmp_path: Path,
+) -> None:
+    fixture_root = tmp_path / "fixture_project"
+    fixture_root.mkdir()
+    source_dir = fixture_root / "src"
+    source_dir.mkdir()
+    (source_dir / "hotspot.py").write_text(
+        """
+from __future__ import annotations
+
+
+def branchy(a: bool, b: bool, c: bool, d: bool, e: bool, f: bool) -> int:
+    total = 0
+    if a:
+        total += 1
+    if b:
+        total += 1
+    if c:
+        total += 1
+    if d:
+        total += 1
+    if e:
+        total += 1
+    if f:
+        total += 1
+    if a and b:
+        total += 1
+    if c and d:
+        total += 1
+    if e and f:
+        total += 1
+    if a or c:
+        total += 1
+    if b or d:
+        total += 1
+    if e or a:
+        total += 1
+    return total
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (fixture_root / "pyproject.toml").write_text(
+        """
+[tool.cremona]
+targets = ["src"]
+baseline = "quality/refactor-baseline.json"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    baseline_path = fixture_root / "quality" / "refactor-baseline.json"
+    baseline_path.parent.mkdir(parents=True, exist_ok=True)
+    baseline_path.write_text(
+        json.dumps({"schema_version": 2, "hotspots": [], "dead_code_candidates": []}),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "cremona.cli",
+            "scan",
+            "--update-baseline",
+        ],
+        cwd=fixture_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+
+    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    assert baseline["schema_version"] == 3
+    assert baseline["baseline_diff"]["baseline_available"] is False
 
 
 def test_refactor_audit_cli_rejects_partial_baseline_init(tmp_path: Path) -> None:
