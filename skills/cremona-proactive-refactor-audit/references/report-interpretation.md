@@ -73,6 +73,11 @@ uv run cremona scan --update-baseline
 git add quality/refactor-baseline.json
 ```
 
+`schema_version = 3` is a breaking baseline format. Cremona rejects older
+baseline files instead of migrating them in place. Regenerate the baseline
+with `uv run cremona scan --update-baseline` after upgrading across a schema
+change.
+
 Gate regressions in CI with coverage:
 
 ```bash
@@ -89,7 +94,7 @@ uv run cremona scan --fail-on-regression
 uv run cremona scan --baseline quality/refactor-baseline.json
 uv run cremona scan --update-baseline
 uv run cremona scan --out-dir output/refactor-audit
-uv run cremona scan --profile recoleta
+uv run cremona scan --profile workflow-app
 ```
 
 ## Key Fields
@@ -119,6 +124,10 @@ uv run cremona scan --profile recoleta
 - `priority_band=investigate_now`: Highest urgency.
 - `priority_band=investigate_soon`: Worth planning soon.
 - `priority_band=watch`: Keep visible, but do not force immediate work.
+- `routing_signals`: Built-in and profile-defined signals that added routing pressure for the file.
+- `routing_rules_triggered`: Bonus rules that matched and increased the file priority.
+- `priority_components.routing_signal_score`: Points contributed by `routing_signals`.
+- `priority_components.routing_bonus_score`: Points contributed by triggered routing bonus rules.
 - `priority_components`: Break down why a file ranked highly. Useful when two files look similar.
 
 `baseline_diff`

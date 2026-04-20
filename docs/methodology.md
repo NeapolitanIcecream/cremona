@@ -1,6 +1,6 @@
 # Methodology
 
-Use Cremona when you need a low-ambiguity answer to two questions:
+Use Cremona when you need a clear answer to two questions:
 
 1. Is the repository accumulating structural debt?
 2. What should be refactored next?
@@ -26,6 +26,10 @@ When you adopt Cremona on a repository for the first time:
 That keeps regressions gated against a committed baseline while preserving the
 coverage signal used in routing.
 
+Cremona currently writes `schema_version = 3`. Older baselines are rejected
+instead of migrated in place, so regenerate them with
+`cremona scan --update-baseline` after upgrading across a schema break.
+
 If `coverage.json` omits files that were not executed, configure coverage
 source roots up front so those files still appear with measured line or branch
 data instead of `unknown`.
@@ -39,7 +43,7 @@ data instead of `unknown`.
 - `vulture` only produces review candidates. It is not permission to delete
   code automatically.
 - The file-level routing queue is the main prioritization view. It combines
-  static pressure, change frequency, churn, coupling, ambiguity signals,
+  static pressure, change frequency, churn, coupling, routing signals,
   dead-code concentration, and optional coverage risk.
 - `debt_status` is the regression verdict. `routing_pressure` is advisory.
 - `signal_health=partial` is a real downgrade. The queue is still useful, but

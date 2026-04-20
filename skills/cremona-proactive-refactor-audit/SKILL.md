@@ -35,7 +35,7 @@ Use Cremona as an evidence-first refactor triage pass for Python repositories. R
 - Add `--coverage-json coverage.json` when a `coverage.py` JSON export already exists.
 - Add `--baseline path/to/refactor-baseline.json` to compare against a non-default baseline.
 - Add `--out-dir path/to/output/refactor-audit` when the user wants reports somewhere other than the default output directory.
-- Add `--profile recoleta` only when the target repository depends on the `recoleta` compatibility routing. Otherwise stay on `generic-python`.
+- Add `--profile <name>` only when the target repository defines a custom Cremona profile under `tool.cremona.profiles.<name>`. Otherwise stay on `generic-python`.
 - Read `report.md` first. Open `report.json` only when you need symbol-level evidence, exact priority components, or baseline details.
 
 ## Bootstrap And Gate A Repository
@@ -58,7 +58,7 @@ Use Cremona as an evidence-first refactor triage pass for Python repositories. R
 ## Turn Findings Into Action
 
 - Recommend the next `3-5` targets unless the user asked for a wider sweep.
-- Explain whether each target is driven by static complexity, churn and coupling, ambiguity, dead-code concentration, or low coverage.
+- Explain whether each target is driven by static complexity, churn and coupling, routing signals, dead-code concentration, or low coverage.
 - Separate immediate work from monitoring work; do not mix `refactor_now` and `monitor` items into one flat recommendation.
 - Propose the smallest safe next step for each target: add characterization tests, extract a helper, split a module, simplify control flow, or delete verified dead code.
 - Do not recommend threshold changes as a way to quiet current debt.
