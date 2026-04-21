@@ -143,6 +143,9 @@ def _candidate_reported_paths(reported: str, lookup: ScopeLookup) -> tuple[str, 
     repo_candidate = relative_path(lookup.repo_root / reported_path, lookup.repo_root)
     if repo_candidate in lookup.allowed_rel_paths:
         return (repo_candidate,)
+    basename_matches = lookup.rel_paths_by_basename.get(reported_path.name, ())
+    if len(basename_matches) == 1:
+        return basename_matches
     return ()
 
 

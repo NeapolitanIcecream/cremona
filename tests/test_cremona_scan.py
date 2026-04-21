@@ -260,6 +260,16 @@ class B:
     ]
 
 
+def test_resolve_reported_path_falls_back_to_unique_basename_for_prefixed_paths(
+    tmp_path: Path,
+) -> None:
+    lookup = _lookup_for(tmp_path, "src/bar.py")
+
+    resolved = audit.resolve_reported_path("foo/bar.py", lookup)
+
+    assert resolved == "src/bar.py"
+
+
 def test_parse_vulture_candidates_reads_text_output(tmp_path: Path) -> None:
     lookup = _lookup_for(tmp_path, "pkg/mod.py")
     raw_text = (
