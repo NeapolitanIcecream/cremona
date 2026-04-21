@@ -6,7 +6,7 @@ import sys
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal, cast
 
 import cremona.scan as audit
 from cremona.core import engine as core_engine
@@ -674,7 +674,7 @@ class Bar:
         "Foo::__init__",
         "Bar::__init__",
     ]
-    hotspots = audit.aggregate_hotspots(findings)
+    hotspots = audit.aggregate_hotspots(findings, config=CONFIG)
     assert len(hotspots) == 2
 
 
@@ -783,6 +783,17 @@ def test_aggregate_hotspots_marks_critical_ruff_as_refactor_soon() -> None:
     )
 
     assert hotspots[0]["classification"] == "refactor_soon"
+
+
+def test_aggregate_hotspots_requires_explicit_config() -> None:
+    try:
+        cast(Any, audit.aggregate_hotspots)([])
+    except TypeError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("Expected aggregate_hotspots() without config to fail")
+
+    assert "config" in message
 
 
 def test_build_history_summary_reads_commit_frequency_churn_and_coupling() -> None:

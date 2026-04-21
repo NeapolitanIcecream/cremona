@@ -148,9 +148,8 @@ def _aggregate_hotspot_record(
 def aggregate_hotspots(
     signals: list[HotspotSignal],
     *,
-    config: AuditConfig | None = None,
+    config: AuditConfig,
 ) -> list[dict[str, Any]]:
-    resolved_config = config or load_audit_config()
     grouped: dict[str, list[HotspotSignal]] = defaultdict(list)
     for signal in signals:
         grouped[signal.symbol_key].append(signal)
@@ -159,7 +158,7 @@ def aggregate_hotspots(
         _aggregate_hotspot_record(
             hotspot_id=hotspot_id,
             values=values,
-            config=resolved_config,
+            config=config,
         )
         for hotspot_id, values in grouped.items()
     ]
