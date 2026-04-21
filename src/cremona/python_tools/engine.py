@@ -121,20 +121,59 @@ def collect_python_files(
     return [files[key] for key in sorted(files)]
 
 
-def resolve_reported_path(reported: str, lookup: ScopeLookup) -> str | None:
+def _candidate_reported_paths(reported: str, lookup: ScopeLookup) -> tuple[str, ...]:
     reported_path = Path(str(reported))
     if reported_path.is_absolute():
         rel_path = relative_path(reported_path, lookup.repo_root)
-        return rel_path if rel_path in lookup.allowed_rel_paths else None
+        return (rel_path,) if rel_path in lookup.allowed_rel_paths else ()
     rel_candidate = reported_path.as_posix()
     if rel_candidate in lookup.allowed_rel_paths:
-        return rel_candidate
-    basename_matches = lookup.rel_paths_by_basename.get(reported_path.name, ())
-    if len(basename_matches) == 1:
-        return basename_matches[0]
+        return (rel_candidate,)
+    parts = reported_path.parts
+    if parts:
+        suffix_matches = tuple(
+            sorted(
+                rel_path
+                for rel_path in lookup.allowed_rel_paths
+                if Path(rel_path).parts[-len(parts) :] == parts
+            )
+        )
+        if suffix_matches:
+            return suffix_matches
     repo_candidate = relative_path(lookup.repo_root / reported_path, lookup.repo_root)
     if repo_candidate in lookup.allowed_rel_paths:
-        return repo_candidate
+        return (repo_candidate,)
+    return ()
+
+
+def resolve_reported_path(reported: str, lookup: ScopeLookup) -> str | None:
+    candidates = _candidate_reported_paths(reported, lookup)
+    if len(candidates) == 1:
+        return candidates[0]
+    return None
+
+
+def _resolve_complexipy_reported_path(
+    *, reported: str, symbol: str, lookup: ScopeLookup
+) -> str | None:
+    rel_path = resolve_reported_path(reported, lookup)
+    if rel_path is not None:
+        return rel_path
+    candidates = _candidate_reported_paths(reported, lookup)
+    if len(candidates) <= 1:
+        return None
+    cleaned = str(symbol).strip()
+    if not cleaned:
+        return None
+    leaf = cleaned.split("::")[-1].split(".")[-1]
+    symbol_matches = [
+        path
+        for path in candidates
+        if cleaned in lookup.qualified_names_by_path.get(path, frozenset())
+        or leaf in lookup.qualified_names_by_path_and_leaf.get(path, {})
+    ]
+    if len(symbol_matches) == 1:
+        return symbol_matches[0]
     return None
 
 
@@ -438,12 +477,19 @@ def parse_complexipy_findings(
         severity = config.complexipy.classify(complexity)
         if severity is None:
             continue
+        symbol = str(item.get("function_name") or "<unknown>")
         rel_path = resolve_reported_path(
-            str(item.get("path") or item.get("file_name")), lookup
+            str(item.get("path") or item.get("file_name")),
+            lookup,
         )
         if rel_path is None:
+            rel_path = _resolve_complexipy_reported_path(
+                reported=str(item.get("path") or item.get("file_name")),
+                symbol=symbol,
+                lookup=lookup,
+            )
+        if rel_path is None:
             continue
-        symbol = str(item.get("function_name") or "<unknown>")
         findings.append(
             HotspotSignal(
                 tool="complexipy",

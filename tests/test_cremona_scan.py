@@ -151,6 +151,63 @@ def test_parse_complexipy_findings_reads_json_thresholds(tmp_path: Path) -> None
     assert finding.metrics["complexity"] == 55
 
 
+def test_parse_complexipy_findings_disambiguates_duplicate_basenames(
+    tmp_path: Path,
+) -> None:
+    """Regression: basename-only complexipy paths must still resolve duplicate files."""
+    core_path = tmp_path / "pkg" / "core" / "engine.py"
+    core_path.parent.mkdir(parents=True, exist_ok=True)
+    core_path.write_text(
+        """
+def build_history_summary() -> int:
+    return 1
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    tools_path = tmp_path / "pkg" / "python_tools" / "engine.py"
+    tools_path.parent.mkdir(parents=True, exist_ok=True)
+    tools_path.write_text(
+        """
+def collect_python_files() -> list[str]:
+    return []
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    lookup = audit.ScopeLookup.from_files(
+        repo_root=tmp_path,
+        files=[core_path, tools_path],
+    )
+    raw_text = json.dumps(
+        [
+            {
+                "complexity": 27,
+                "file_name": "engine.py",
+                "function_name": "build_history_summary",
+                "path": "engine.py",
+            },
+            {
+                "complexity": 18,
+                "file_name": "engine.py",
+                "function_name": "collect_python_files",
+                "path": "engine.py",
+            },
+        ]
+    )
+
+    findings = audit.parse_complexipy_findings(
+        raw_text=raw_text,
+        lookup=lookup,
+        config=CONFIG,
+    )
+
+    assert [(item.file, item.symbol) for item in findings] == [
+        ("pkg/core/engine.py", "build_history_summary"),
+        ("pkg/python_tools/engine.py", "collect_python_files"),
+    ]
+
+
 def test_parse_vulture_candidates_reads_text_output(tmp_path: Path) -> None:
     lookup = _lookup_for(tmp_path, "pkg/mod.py")
     raw_text = (
@@ -336,6 +393,15 @@ all = [
     assert profile.classify_subsystem("app/cli/app.py") == "cli"
     assert profile.classify_subsystem("app/misc.py") == "other"
     assert "kwargs_bridge_hits" in profile.routing_signal_names
+
+
+def test_load_audit_config_uses_bootstrap_history_defaults(tmp_path: Path) -> None:
+    config = audit.load_audit_config(repo_root=tmp_path)
+
+    assert config.history.lookback_days == 180
+    assert config.history.min_shared_commits == 2
+    assert config.history.coupling_ignore_commit_file_count == 25
+    assert CONFIG.history.min_shared_commits == config.history.min_shared_commits
 
 
 def test_load_audit_config_rejects_invalid_profile_rules(tmp_path: Path) -> None:

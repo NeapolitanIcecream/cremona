@@ -80,7 +80,7 @@ high_confidence_candidate_min = 80
 
 [tool.cremona.history]
 lookback_days = 180
-min_shared_commits = 3
+min_shared_commits = 2
 coupling_ignore_commit_file_count = 25
 
 [tool.cremona.coverage]

@@ -61,7 +61,7 @@ def load_audit_config(*, repo_root: Path = REPO_ROOT) -> AuditConfig:
         },
         "history": {
             "lookback_days": 180,
-            "min_shared_commits": 3,
+            "min_shared_commits": 2,
             "coupling_ignore_commit_file_count": 25,
         },
         "coverage": {
@@ -156,4 +156,3 @@ def resolve_repo_path(repo_root: Path, value: str) -> Path:
     if candidate.is_absolute():
         return candidate
     return (repo_root / candidate).resolve()
-
