@@ -165,15 +165,23 @@ def _resolve_complexipy_reported_path(
     cleaned = str(symbol).strip()
     if not cleaned:
         return None
-    leaf = cleaned.split("::")[-1].split(".")[-1]
-    symbol_matches = [
+    exact_matches = [
         path
         for path in candidates
         if cleaned in lookup.qualified_names_by_path.get(path, frozenset())
-        or leaf in lookup.qualified_names_by_path_and_leaf.get(path, {})
     ]
-    if len(symbol_matches) == 1:
-        return symbol_matches[0]
+    if len(exact_matches) == 1:
+        return exact_matches[0]
+    if exact_matches:
+        return None
+    leaf = cleaned.split("::")[-1].split(".")[-1]
+    leaf_matches = [
+        path
+        for path in candidates
+        if leaf in lookup.qualified_names_by_path_and_leaf.get(path, {})
+    ]
+    if len(leaf_matches) == 1:
+        return leaf_matches[0]
     return None
 
 

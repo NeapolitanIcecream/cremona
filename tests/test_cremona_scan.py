@@ -208,6 +208,58 @@ def collect_python_files() -> list[str]:
     ]
 
 
+def test_parse_complexipy_findings_prefers_exact_symbol_before_leaf_fallback(
+    tmp_path: Path,
+) -> None:
+    """Regression: exact qualified matches must win before shared leaf-name matches."""
+    alpha_path = tmp_path / "pkg" / "alpha" / "engine.py"
+    alpha_path.parent.mkdir(parents=True, exist_ok=True)
+    alpha_path.write_text(
+        """
+class A:
+    def run(self) -> int:
+        return 1
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    beta_path = tmp_path / "pkg" / "beta" / "engine.py"
+    beta_path.parent.mkdir(parents=True, exist_ok=True)
+    beta_path.write_text(
+        """
+class B:
+    def run(self) -> int:
+        return 2
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    lookup = audit.ScopeLookup.from_files(
+        repo_root=tmp_path,
+        files=[alpha_path, beta_path],
+    )
+    raw_text = json.dumps(
+        [
+            {
+                "complexity": 18,
+                "file_name": "engine.py",
+                "function_name": "A::run",
+                "path": "engine.py",
+            }
+        ]
+    )
+
+    findings = audit.parse_complexipy_findings(
+        raw_text=raw_text,
+        lookup=lookup,
+        config=CONFIG,
+    )
+
+    assert [(item.file, item.symbol) for item in findings] == [
+        ("pkg/alpha/engine.py", "A::run"),
+    ]
+
+
 def test_parse_vulture_candidates_reads_text_output(tmp_path: Path) -> None:
     lookup = _lookup_for(tmp_path, "pkg/mod.py")
     raw_text = (
