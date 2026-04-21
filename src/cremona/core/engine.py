@@ -57,22 +57,38 @@ def infer_subsystem(rel_path: str) -> str:
     return _ACTIVE_PROFILE.classify_subsystem(rel_path)
 
 
-def _classify_hotspot(values: list[HotspotSignal]) -> str:
+def _has_critical_complexity_signal(
+    values: list[HotspotSignal],
+    *,
+    config: AuditConfig,
+) -> bool:
+    for signal in values:
+        if signal.tool == "complexipy" and signal.severity == "critical":
+            return True
+        if signal.tool != "lizard":
+            continue
+        ccn = int(signal.metrics.get("ccn", 0))
+        if config.lizard.ccn.classify(ccn) == "critical":
+            return True
+    return False
+
+
+def _classify_hotspot(values: list[HotspotSignal], *, config: AuditConfig) -> str:
     distinct_warning_plus = {
         signal.tool for signal in values if SEVERITY_RANK[signal.severity] >= 1
     }
     distinct_high_plus = {
         signal.tool for signal in values if SEVERITY_RANK[signal.severity] >= 2
     }
-    has_critical_complexity = any(
-        signal.tool in {"lizard", "complexipy"} and signal.severity == "critical"
-        for signal in values
+    has_critical_complexity = _has_critical_complexity_signal(
+        values,
+        config=config,
     )
     if has_critical_complexity or len(distinct_high_plus) >= 2:
         return "refactor_now"
     if (
         any(signal.severity in {"high", "critical"} for signal in values)
-        or len(distinct_warning_plus) >= 2
+        or len(distinct_warning_plus) >= 3
     ):
         return "refactor_soon"
     return "monitor"
@@ -112,6 +128,7 @@ def _aggregate_hotspot_record(
     *,
     hotspot_id: str,
     values: list[HotspotSignal],
+    config: AuditConfig,
 ) -> dict[str, Any]:
     line_candidates = [signal.line for signal in values if signal.line is not None]
     return {
@@ -119,7 +136,7 @@ def _aggregate_hotspot_record(
         "file": values[0].file,
         "symbol": max((signal.symbol for signal in values), key=len),
         "line": min(line_candidates) if line_candidates else None,
-        "classification": _classify_hotspot(values),
+        "classification": _classify_hotspot(values, config=config),
         "subsystem": infer_subsystem(values[0].file),
         "tool_count": len({signal.tool for signal in values}),
         "tools": sorted({signal.tool for signal in values}),
@@ -128,13 +145,22 @@ def _aggregate_hotspot_record(
     }
 
 
-def aggregate_hotspots(signals: list[HotspotSignal]) -> list[dict[str, Any]]:
+def aggregate_hotspots(
+    signals: list[HotspotSignal],
+    *,
+    config: AuditConfig | None = None,
+) -> list[dict[str, Any]]:
+    resolved_config = config or load_audit_config()
     grouped: dict[str, list[HotspotSignal]] = defaultdict(list)
     for signal in signals:
         grouped[signal.symbol_key].append(signal)
 
     hotspots = [
-        _aggregate_hotspot_record(hotspot_id=hotspot_id, values=values)
+        _aggregate_hotspot_record(
+            hotspot_id=hotspot_id,
+            values=values,
+            config=resolved_config,
+        )
         for hotspot_id, values in grouped.items()
     ]
     hotspots.sort(key=hotspot_sort_key)
@@ -670,6 +696,9 @@ def _routing_priority_components(
         "change_score": change_score,
         "coupling_score": coupling_score,
         "static_score": _static_score(hotspot_summary),
+        "subsystem_priority_score": _ACTIVE_PROFILE.subsystem_priority_score(
+            infer_subsystem(context.file_name)
+        ),
         "dead_code_score": _dead_code_score(
             high_confidence_dead_code=high_confidence_dead_code,
             review_candidate_dead_code=review_candidate_dead_code,
@@ -690,7 +719,7 @@ def _routing_priority_components(
 def _build_agent_routing_item(context: RoutingFileContext) -> dict[str, Any]:
     hotspot_summary = _summarize_file_hotspots(context.file_hotspots)
     priority_components, routing_rules_triggered = _routing_priority_components(context)
-    priority_score = min(100, sum(priority_components.values()))
+    priority_score = max(0, min(100, sum(priority_components.values())))
     return {
         "file": context.file_name,
         "subsystem": infer_subsystem(context.file_name),
@@ -1907,7 +1936,8 @@ def run_refactor_audit(
         scope_state = _prepare_audit_scope(resolved_request)
         tool_run = _run_audit_tools(scope_state, resolved_request)
         hotspots = aggregate_hotspots(
-            tool_run.ruff_signals + tool_run.lizard_signals + tool_run.complexipy_signals
+            tool_run.ruff_signals + tool_run.lizard_signals + tool_run.complexipy_signals,
+            config=resolved_request.config,
         )
         tool_summaries = build_tool_summaries(
             ruff_signals=tool_run.ruff_signals,
