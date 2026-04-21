@@ -10,6 +10,19 @@ from typing import Any, Literal, cast
 
 import cremona.scan as audit
 from cremona.core import engine as core_engine
+from tests._report_builders import (
+    make_baseline_diff,
+    make_dead_code_candidate,
+    make_history_summary,
+    make_hotspot,
+    make_report,
+    make_repo_verdict,
+    make_routing_item,
+    make_scope,
+    make_signal,
+    make_summary,
+    make_tool_summaries,
+)
 
 CONFIG = audit.load_audit_config(repo_root=Path(__file__).resolve().parents[1])
 audit._set_active_profile(audit.get_profile("generic-python"))
@@ -74,6 +87,185 @@ def _coverage_payload() -> dict[str, object]:
             "pkg/unknown.py": {"summary": {}},
         },
     }
+
+
+def _partial_scope_baseline_report() -> dict[str, Any]:
+    return {
+        "schema_version": 3,
+        "scope": make_scope(
+            files=["pkg/in_scope.py", "pkg/out_of_scope.py"],
+            file_count=2,
+        ),
+        "hotspots": [
+            make_hotspot(
+                id="pkg/in_scope.py::branchy",
+                file="pkg/in_scope.py",
+                classification="monitor",
+                metrics={"ruff": {"complexity": 12}},
+                signals=[
+                    make_signal(
+                        tool="ruff",
+                        severity="warning",
+                        symbol="branchy",
+                        metrics={"complexity": 12},
+                    )
+                ],
+            ),
+            make_hotspot(
+                id="pkg/out_of_scope.py::other_hotspot",
+                file="pkg/out_of_scope.py",
+                symbol="other_hotspot",
+                classification="refactor_now",
+                tools=["complexipy"],
+                metrics={"complexipy": {"complexity": 55}},
+                signals=[
+                    make_signal(
+                        tool="complexipy",
+                        severity="critical",
+                        symbol="other_hotspot",
+                        line=20,
+                        metrics={"complexity": 55},
+                        message="complexity=55",
+                    )
+                ],
+            ),
+        ],
+        "dead_code_candidates": [
+            make_dead_code_candidate(
+                id="pkg/out_of_scope.py::function::unused_helper",
+                file="pkg/out_of_scope.py",
+            )
+        ],
+        "agent_routing_queue": [
+            make_routing_item(
+                file="pkg/out_of_scope.py",
+                priority_score=80,
+                priority_band="investigate_now",
+                change_frequency=8,
+                churn=100,
+                dead_code_candidate_count=1,
+                hotspot_summary={
+                    "refactor_now": 1,
+                    "refactor_soon": 0,
+                    "monitor": 0,
+                    "multi_tool_monitor": 0,
+                    "top_symbols": [],
+                },
+                priority_components={
+                    "change_score": 10,
+                    "coupling_score": 0,
+                    "static_score": 5,
+                    "subsystem_priority_score": 0,
+                    "routing_signal_score": 0,
+                    "routing_bonus_score": 0,
+                    "dead_code_score": 3,
+                    "coverage_risk_score": 0,
+                },
+            )
+        ],
+        "history_summary": make_history_summary(
+            max_commit_frequency=8,
+            max_churn=100,
+            files={
+                "pkg/out_of_scope.py": {
+                    "commit_frequency": 8,
+                    "churn": 100,
+                    "top_coupled_files": [],
+                }
+            },
+        ),
+    }
+
+
+def _partial_scope_current_report() -> dict[str, Any]:
+    return make_report(
+        summary=make_summary(
+            files_scanned=1,
+            hotspots_total=1,
+            refactor_soon_total=1,
+            agent_routing_queue_total=1,
+            investigate_soon_total=1,
+        ),
+        repo_verdict=make_repo_verdict(
+            status="strained",
+            debt_status="strained",
+            routing_pressure="investigate_soon",
+            summary=(
+                "Existing structural debt remains, but the current scope did not regress. "
+                "Routing pressure is investigate_soon. Signal health is partial: missing coverage."
+            ),
+            signal_health="partial",
+            missing_signals=["coverage"],
+            investigate_soon_total=1,
+        ),
+        hotspots=[
+            make_hotspot(
+                id="pkg/in_scope.py::branchy",
+                file="pkg/in_scope.py",
+                classification="refactor_soon",
+                metrics={"ruff": {"complexity": 26}},
+                signals=[
+                    make_signal(
+                        tool="ruff",
+                        severity="critical",
+                        symbol="branchy",
+                        metrics={"complexity": 26},
+                        message="complexity=26",
+                    )
+                ],
+            )
+        ],
+        tool_summaries=make_tool_summaries(
+            ruff={"findings_total": 1, "warning": 0, "high": 0, "critical": 1},
+        ),
+        baseline_diff=make_baseline_diff(
+            has_regressions=True,
+            new=[{"kind": "hotspot"}],
+        ),
+        agent_routing_queue=[
+            make_routing_item(
+                file="pkg/in_scope.py",
+                priority_score=50,
+                priority_band="investigate_soon",
+                change_frequency=5,
+                churn=40,
+                coverage={"mode": "line", "fraction": 0.5},
+                hotspot_summary={
+                    "refactor_now": 0,
+                    "refactor_soon": 1,
+                    "monitor": 0,
+                    "multi_tool_monitor": 0,
+                    "top_symbols": [],
+                },
+                priority_components={
+                    "change_score": 10,
+                    "coupling_score": 0,
+                    "static_score": 3,
+                    "subsystem_priority_score": 0,
+                    "routing_signal_score": 0,
+                    "routing_bonus_score": 0,
+                    "dead_code_score": 0,
+                    "coverage_risk_score": 5,
+                },
+            )
+        ],
+        history_summary=make_history_summary(
+            max_commit_frequency=5,
+            max_churn=40,
+            files={
+                "pkg/in_scope.py": {
+                    "commit_frequency": 5,
+                    "churn": 40,
+                    "top_coupled_files": [],
+                }
+            },
+        ),
+        scope=make_scope(files=["pkg/in_scope.py"], file_count=1),
+    )
+
+
+def _partial_scope_snapshot_inputs() -> tuple[dict[str, Any], dict[str, Any]]:
+    return (_partial_scope_baseline_report(), _partial_scope_current_report())
 
 
 def test_parse_ruff_findings_reads_c901_json(tmp_path: Path) -> None:
@@ -1848,99 +2040,62 @@ def test_build_baseline_diff_marks_resolved_hotspots() -> None:
 
 
 def test_render_markdown_report_contains_required_sections() -> None:
-    report = {
-        "summary": {
-            "files_scanned": 1,
-            "hotspots_total": 1,
-            "monitor_total": 0,
-            "refactor_soon_total": 1,
-            "refactor_now_total": 0,
-            "agent_routing_queue_total": 1,
-            "investigate_now_total": 0,
-            "investigate_soon_total": 1,
-            "watch_total": 0,
-            "dead_code_candidates_total": 1,
-            "dead_code_high_confidence_total": 1,
-        },
-        "repo_verdict": {
-            "status": "strained",
-            "debt_status": "strained",
-            "routing_pressure": "investigate_soon",
-            "summary": "Existing structural debt remains, but the current scope did not regress. Routing pressure is investigate_soon. Signal health is partial: missing coverage.",
-            "signal_health": "partial",
-            "missing_signals": ["coverage"],
-        },
-        "history_summary": {"status": "available", "lookback_days": 180},
-        "tool_summaries": {
-            "ruff": {"findings_total": 1, "warning": 1, "high": 0, "critical": 0},
-            "lizard": {"findings_total": 1, "warning": 1, "high": 0, "critical": 0},
-            "complexipy": {
-                "findings_total": 0,
-                "warning": 0,
-                "high": 0,
-                "critical": 0,
-            },
-            "vulture": {
+    report = make_report(
+        summary=make_summary(
+            files_scanned=1,
+            hotspots_total=1,
+            refactor_soon_total=1,
+            agent_routing_queue_total=1,
+            investigate_soon_total=1,
+            dead_code_candidates_total=1,
+            dead_code_high_confidence_total=1,
+        ),
+        repo_verdict=make_repo_verdict(
+            status="strained",
+            debt_status="strained",
+            routing_pressure="investigate_soon",
+            summary=(
+                "Existing structural debt remains, but the current scope did not regress. "
+                "Routing pressure is investigate_soon. Signal health is partial: missing coverage."
+            ),
+            signal_health="partial",
+            missing_signals=["coverage"],
+        ),
+        tool_summaries=make_tool_summaries(
+            ruff={"findings_total": 1, "warning": 1, "high": 0, "critical": 0},
+            lizard={"findings_total": 1, "warning": 1, "high": 0, "critical": 0},
+            vulture={
                 "findings_total": 1,
                 "review_candidate": 0,
                 "high_confidence_candidate": 1,
             },
-        },
-        "hotspots": [
-            {
-                "classification": "refactor_soon",
-                "tool_count": 2,
-                "file": "pkg/example.py",
-                "symbol": "branchy",
-                "tools": ["lizard", "ruff"],
-                "metrics": {
+        ),
+        hotspots=[
+            make_hotspot(
+                classification="refactor_soon",
+                tools=["lizard", "ruff"],
+                metrics={
                     "lizard": {"ccn": 18, "nloc": 90, "parameter_count": 4},
                     "ruff": {"complexity": 16},
                 },
-            }
+            )
         ],
-        "dead_code_candidates": [
-            {
-                "classification": "high_confidence_candidate",
-                "confidence": 90,
-                "file": "pkg/example.py",
-                "symbol": "unused_helper",
-                "kind": "function",
-            }
+        dead_code_candidates=[make_dead_code_candidate()],
+        agent_routing_queue=[
+            make_routing_item(
+                priority_score=40,
+                priority_band="investigate_soon",
+                change_frequency=4,
+                churn=20,
+                coverage={"mode": "branch", "fraction": 0.8},
+            )
         ],
-        "agent_routing_queue": [
-            {
-                "file": "pkg/example.py",
-                "priority_band": "investigate_soon",
-                "priority_score": 40,
-                "change_frequency": 4,
-                "churn": 20,
-                "top_coupled_files": [],
-                "coverage": {"mode": "branch", "fraction": 0.8},
-            }
+        baseline_diff=make_baseline_diff(),
+        recommended_refactor_queue=[
+            {"subsystem": "pipeline", "investigate_now": 0, "investigate_soon": 0, "watch": 0},
+            {"subsystem": "other", "investigate_now": 0, "investigate_soon": 1, "watch": 0},
         ],
-        "baseline_diff": {
-            "baseline_available": True,
-            "has_regressions": False,
-            "new": [],
-            "worsened": [],
-            "resolved": [],
-        },
-        "recommended_refactor_queue": [
-            {
-                "subsystem": "pipeline",
-                "investigate_now": 0,
-                "investigate_soon": 0,
-                "watch": 0,
-            },
-            {
-                "subsystem": "other",
-                "investigate_now": 0,
-                "investigate_soon": 1,
-                "watch": 0,
-            },
-        ],
-    }
+    )
 
     markdown = audit.render_markdown_report(report)
 
@@ -1956,65 +2111,25 @@ def test_render_markdown_report_contains_required_sections() -> None:
 
 
 def test_build_baseline_snapshot_resets_diff_and_repo_verdict() -> None:
-    report = {
-        "summary": {
-            "files_scanned": 1,
-            "hotspots_total": 1,
-            "monitor_total": 0,
-            "refactor_soon_total": 1,
-            "refactor_now_total": 0,
-            "agent_routing_queue_total": 0,
-            "investigate_now_total": 0,
-            "investigate_soon_total": 0,
-            "watch_total": 0,
-            "dead_code_candidates_total": 0,
-            "dead_code_high_confidence_total": 0,
-        },
-        "repo_verdict": {
-            "status": "corroding",
-            "debt_status": "corroding",
-            "routing_pressure": "none",
-            "summary": "Structural debt is regressing in the current scope.",
-            "has_regressions": True,
-            "signal_health": "full",
-            "missing_signals": [],
-            "refactor_now_total": 0,
-            "investigate_now_total": 0,
-            "investigate_soon_total": 0,
-        },
-        "hotspots": [
-            {
-                "id": "pkg/example.py::branchy",
-                "file": "pkg/example.py",
-                "symbol": "branchy",
-                "classification": "refactor_soon",
-                "tools": ["ruff"],
-                "metrics": {"ruff": {"complexity": 16}},
-            }
+    report = make_report(
+        summary=make_summary(files_scanned=1, hotspots_total=1, refactor_soon_total=1),
+        repo_verdict=make_repo_verdict(
+            status="corroding",
+            debt_status="corroding",
+            summary="Structural debt is regressing in the current scope.",
+            has_regressions=True,
+        ),
+        hotspots=[
+            make_hotspot(
+                classification="refactor_soon",
+                metrics={"ruff": {"complexity": 16}},
+            )
         ],
-        "dead_code_candidates": [],
-        "agent_routing_queue": [],
-        "history_summary": {
-            "status": "available",
-            "lookback_days": 180,
-            "max_commit_frequency": 0,
-            "max_churn": 0,
-            "files": {},
-        },
-        "tool_summaries": {},
-        "baseline_diff": {
-            "baseline_available": True,
-            "baseline_path": "quality/refactor-baseline.json",
-            "has_regressions": True,
-            "new": [{"kind": "hotspot"}],
-            "worsened": [],
-            "resolved": [],
-        },
-        "recommended_refactor_queue": [],
-        "scope": {"files": ["pkg/example.py"]},
-        "schema_version": 3,
-        "generated_at": "2026-04-02T00:00:00+00:00",
-    }
+        baseline_diff=make_baseline_diff(
+            has_regressions=True,
+            new=[{"kind": "hotspot"}],
+        ),
+    )
 
     snapshot = audit.build_baseline_snapshot(report)
 
@@ -2026,242 +2141,8 @@ def test_build_baseline_snapshot_resets_diff_and_repo_verdict() -> None:
     assert snapshot["repo_verdict"]["status"] == "strained"
 
 
-def test_build_baseline_snapshot_merges_partial_scope_updates() -> None:
-    baseline_report = {
-        "schema_version": 3,
-        "scope": {
-            "files": ["pkg/in_scope.py", "pkg/out_of_scope.py"],
-            "file_count": 2,
-        },
-        "hotspots": [
-            {
-                "id": "pkg/in_scope.py::branchy",
-                "file": "pkg/in_scope.py",
-                "symbol": "branchy",
-                "classification": "monitor",
-                "subsystem": "other",
-                "tools": ["ruff"],
-                "metrics": {"ruff": {"complexity": 12}},
-                "signals": [
-                    {
-                        "tool": "ruff",
-                        "severity": "warning",
-                        "symbol": "branchy",
-                        "line": 10,
-                        "metrics": {"complexity": 12},
-                        "message": "complexity=12",
-                    }
-                ],
-            },
-            {
-                "id": "pkg/out_of_scope.py::other_hotspot",
-                "file": "pkg/out_of_scope.py",
-                "symbol": "other_hotspot",
-                "classification": "refactor_now",
-                "subsystem": "other",
-                "tools": ["complexipy"],
-                "metrics": {"complexipy": {"complexity": 55}},
-                "signals": [
-                    {
-                        "tool": "complexipy",
-                        "severity": "critical",
-                        "symbol": "other_hotspot",
-                        "line": 20,
-                        "metrics": {"complexity": 55},
-                        "message": "complexity=55",
-                    }
-                ],
-            },
-        ],
-        "dead_code_candidates": [
-            {
-                "id": "pkg/out_of_scope.py::function::unused_helper",
-                "file": "pkg/out_of_scope.py",
-                "line": 30,
-                "symbol": "unused_helper",
-                "kind": "function",
-                "confidence": 90,
-                "classification": "high_confidence_candidate",
-                "subsystem": "other",
-                "size": None,
-            }
-        ],
-        "agent_routing_queue": [
-            {
-                "file": "pkg/out_of_scope.py",
-                "subsystem": "other",
-                "priority_score": 80,
-                "priority_band": "investigate_now",
-                "change_frequency": 8,
-                "churn": 100,
-                "top_coupled_files": [],
-                "hotspot_summary": {
-                    "refactor_now": 1,
-                    "refactor_soon": 0,
-                    "monitor": 0,
-                    "multi_tool_monitor": 0,
-                    "top_symbols": [],
-                },
-                "routing_signals": {
-                    "module_package_shadow": 0,
-                    "wildcard_reexport": 0,
-                    "facade_reexport": 0,
-                },
-                "routing_rules_triggered": [],
-                "dead_code_candidate_count": 1,
-                "coverage": {"mode": "unknown", "fraction": None},
-                "priority_components": {
-                    "change_score": 10,
-                    "coupling_score": 0,
-                    "static_score": 5,
-                    "subsystem_priority_score": 0,
-                    "routing_signal_score": 0,
-                    "routing_bonus_score": 0,
-                    "dead_code_score": 3,
-                    "coverage_risk_score": 0,
-                },
-            }
-        ],
-        "history_summary": {
-            "status": "available",
-            "lookback_days": 180,
-            "max_commit_frequency": 8,
-            "max_churn": 100,
-            "files": {
-                "pkg/out_of_scope.py": {
-                    "commit_frequency": 8,
-                    "churn": 100,
-                    "top_coupled_files": [],
-                }
-            },
-        },
-    }
-    report = {
-        "summary": {
-            "files_scanned": 1,
-            "hotspots_total": 1,
-            "monitor_total": 0,
-            "refactor_soon_total": 1,
-            "refactor_now_total": 0,
-            "agent_routing_queue_total": 1,
-            "investigate_now_total": 0,
-            "investigate_soon_total": 1,
-            "watch_total": 0,
-            "dead_code_candidates_total": 0,
-            "dead_code_high_confidence_total": 0,
-        },
-        "repo_verdict": {
-            "status": "strained",
-            "debt_status": "strained",
-            "routing_pressure": "investigate_soon",
-            "summary": "Existing structural debt remains, but the current scope did not regress. Routing pressure is investigate_soon. Signal health is partial: missing coverage.",
-            "has_regressions": False,
-            "signal_health": "partial",
-            "missing_signals": ["coverage"],
-            "refactor_now_total": 0,
-            "investigate_now_total": 0,
-            "investigate_soon_total": 1,
-        },
-        "hotspots": [
-            {
-                "id": "pkg/in_scope.py::branchy",
-                "file": "pkg/in_scope.py",
-                "symbol": "branchy",
-                "classification": "refactor_soon",
-                "subsystem": "other",
-                "tools": ["ruff"],
-                "metrics": {"ruff": {"complexity": 26}},
-                "signals": [
-                    {
-                        "tool": "ruff",
-                        "severity": "critical",
-                        "symbol": "branchy",
-                        "line": 10,
-                        "metrics": {"complexity": 26},
-                        "message": "complexity=26",
-                    }
-                ],
-            }
-        ],
-        "dead_code_candidates": [],
-        "tool_summaries": {
-            "ruff": {"findings_total": 1, "warning": 0, "high": 0, "critical": 1},
-            "lizard": {"findings_total": 0, "warning": 0, "high": 0, "critical": 0},
-            "complexipy": {
-                "findings_total": 0,
-                "warning": 0,
-                "high": 0,
-                "critical": 0,
-            },
-            "vulture": {
-                "findings_total": 0,
-                "review_candidate": 0,
-                "high_confidence_candidate": 0,
-            },
-        },
-        "baseline_diff": {
-            "baseline_available": True,
-            "baseline_path": "quality/refactor-baseline.json",
-            "has_regressions": True,
-            "new": [{"kind": "hotspot"}],
-            "worsened": [],
-            "resolved": [],
-        },
-        "agent_routing_queue": [
-            {
-                "file": "pkg/in_scope.py",
-                "subsystem": "other",
-                "priority_score": 50,
-                "priority_band": "investigate_soon",
-                "change_frequency": 5,
-                "churn": 40,
-                "top_coupled_files": [],
-                "hotspot_summary": {
-                    "refactor_now": 0,
-                    "refactor_soon": 1,
-                    "monitor": 0,
-                    "multi_tool_monitor": 0,
-                    "top_symbols": [],
-                },
-                "routing_signals": {
-                    "module_package_shadow": 0,
-                    "wildcard_reexport": 0,
-                    "facade_reexport": 0,
-                },
-                "routing_rules_triggered": [],
-                "dead_code_candidate_count": 0,
-                "coverage": {"mode": "line", "fraction": 0.5},
-                "priority_components": {
-                    "change_score": 10,
-                    "coupling_score": 0,
-                    "static_score": 3,
-                    "subsystem_priority_score": 0,
-                    "routing_signal_score": 0,
-                    "routing_bonus_score": 0,
-                    "dead_code_score": 0,
-                    "coverage_risk_score": 5,
-                },
-            }
-        ],
-        "history_summary": {
-            "status": "available",
-            "lookback_days": 180,
-            "max_commit_frequency": 5,
-            "max_churn": 40,
-            "files": {
-                "pkg/in_scope.py": {
-                    "commit_frequency": 5,
-                    "churn": 40,
-                    "top_coupled_files": [],
-                }
-            },
-        },
-        "recommended_refactor_queue": [],
-        "scope": {"files": ["pkg/in_scope.py"], "file_count": 1},
-        "schema_version": 3,
-        "generated_at": "2026-04-02T00:00:00+00:00",
-    }
-
+def test_build_baseline_snapshot_preserves_out_of_scope_records() -> None:
+    baseline_report, report = _partial_scope_snapshot_inputs()
     snapshot = audit.build_baseline_snapshot(
         report,
         baseline_report=baseline_report,
@@ -2272,132 +2153,85 @@ def test_build_baseline_snapshot_merges_partial_scope_updates() -> None:
         "pkg/out_of_scope.py::other_hotspot",
         "pkg/in_scope.py::branchy",
     ]
-    assert snapshot["summary"]["files_scanned"] == 2
-    assert snapshot["summary"]["hotspots_total"] == 2
-    assert snapshot["tool_summaries"]["ruff"]["critical"] == 1
-    assert snapshot["tool_summaries"]["complexipy"]["critical"] == 1
     assert snapshot["dead_code_candidates"][0]["file"] == "pkg/out_of_scope.py"
     assert [item["file"] for item in snapshot["agent_routing_queue"]] == [
         "pkg/out_of_scope.py",
         "pkg/in_scope.py",
     ]
     assert snapshot["history_summary"]["files"]["pkg/out_of_scope.py"]["churn"] == 100
+
+
+def test_build_baseline_snapshot_recomputes_summary_and_tool_summaries_after_partial_merge() -> None:
+    baseline_report, report = _partial_scope_snapshot_inputs()
+    snapshot = audit.build_baseline_snapshot(
+        report,
+        baseline_report=baseline_report,
+        scope_files=["pkg/in_scope.py"],
+    )
+
+    assert snapshot["summary"]["files_scanned"] == 2
+    assert snapshot["summary"]["hotspots_total"] == 2
+    assert snapshot["tool_summaries"]["ruff"]["critical"] == 1
+    assert snapshot["tool_summaries"]["complexipy"]["critical"] == 1
     assert snapshot["baseline_diff"]["has_regressions"] is False
+
+
+def test_build_baseline_snapshot_rebuilds_recommended_queue_after_partial_merge() -> None:
+    baseline_report, report = _partial_scope_snapshot_inputs()
+    snapshot = audit.build_baseline_snapshot(
+        report,
+        baseline_report=baseline_report,
+        scope_files=["pkg/in_scope.py"],
+    )
+
+    recommended_other = next(
+        item for item in snapshot["recommended_queue"] if item["subsystem"] == "other"
+    )
+    assert recommended_other["investigate_now"] == 1
+    assert recommended_other["investigate_soon"] == 1
+    assert snapshot["recommended_queue"] == snapshot["recommended_refactor_queue"]
 
 
 def test_build_baseline_snapshot_rejects_legacy_baseline_schema() -> None:
     baseline_report = {
         "schema_version": 2,
-        "scope": {
-            "files": ["pkg/in_scope.py", "pkg/out_of_scope.py"],
-            "file_count": 2,
-        },
+        "scope": make_scope(
+            files=["pkg/in_scope.py", "pkg/out_of_scope.py"],
+            file_count=2,
+        ),
         "hotspots": [],
         "dead_code_candidates": [],
     }
-    report = {
-        "summary": {
-            "files_scanned": 1,
-            "hotspots_total": 0,
-            "monitor_total": 0,
-            "refactor_soon_total": 0,
-            "refactor_now_total": 0,
-            "agent_routing_queue_total": 1,
-            "investigate_now_total": 0,
-            "investigate_soon_total": 0,
-            "watch_total": 1,
-            "dead_code_candidates_total": 0,
-            "dead_code_high_confidence_total": 0,
-        },
-        "repo_verdict": {
-            "status": "stable",
-            "debt_status": "stable",
-            "routing_pressure": "watch_only",
-            "summary": "No structural debt regressions were detected in the current scope.",
-            "has_regressions": False,
-            "refactor_now_total": 0,
-            "investigate_now_total": 0,
-            "investigate_soon_total": 0,
-        },
-        "hotspots": [],
-        "dead_code_candidates": [],
-        "tool_summaries": {
-            "ruff": {"findings_total": 0, "warning": 0, "high": 0, "critical": 0},
-            "lizard": {"findings_total": 0, "warning": 0, "high": 0, "critical": 0},
-            "complexipy": {
-                "findings_total": 0,
-                "warning": 0,
-                "high": 0,
-                "critical": 0,
-            },
-            "vulture": {
-                "findings_total": 0,
-                "review_candidate": 0,
-                "high_confidence_candidate": 0,
-            },
-        },
-        "agent_routing_queue": [
-            {
-                "file": "pkg/in_scope.py",
-                "subsystem": "other",
-                "priority_score": 20,
-                "priority_band": "watch",
-                "change_frequency": 1,
-                "churn": 2,
-                "top_coupled_files": [],
-                "hotspot_summary": {
-                    "refactor_now": 0,
-                    "refactor_soon": 0,
-                    "monitor": 0,
-                    "multi_tool_monitor": 0,
-                    "top_symbols": [],
-                },
-                "routing_signals": {
-                    "module_package_shadow": 0,
-                    "wildcard_reexport": 0,
-                    "facade_reexport": 0,
-                },
-                "routing_rules_triggered": [],
-                "dead_code_candidate_count": 0,
-                "coverage": {"mode": "unknown", "fraction": None},
-                "priority_components": {
-                    "change_score": 2,
-                    "coupling_score": 0,
-                    "static_score": 0,
-                    "subsystem_priority_score": 0,
-                    "routing_signal_score": 0,
-                    "routing_bonus_score": 0,
-                    "dead_code_score": 0,
-                    "coverage_risk_score": 0,
-                },
-            }
+    report = make_report(
+        summary=make_summary(
+            files_scanned=1,
+            agent_routing_queue_total=1,
+            watch_total=1,
+        ),
+        agent_routing_queue=[
+            make_routing_item(
+                file="pkg/in_scope.py",
+                subsystem="other",
+                priority_score=20,
+                priority_band="watch",
+                change_frequency=1,
+                churn=2,
+            )
         ],
-        "history_summary": {
-            "status": "available",
-            "lookback_days": 180,
-            "max_commit_frequency": 1,
-            "max_churn": 2,
-            "files": {
+        history_summary=make_history_summary(
+            max_commit_frequency=1,
+            max_churn=2,
+            files={
                 "pkg/in_scope.py": {
                     "commit_frequency": 1,
                     "churn": 2,
                     "top_coupled_files": [],
                 }
             },
-        },
-        "baseline_diff": {
-            "baseline_available": True,
-            "baseline_path": "quality/refactor-baseline.json",
-            "has_regressions": False,
-            "new": [],
-            "worsened": [],
-            "resolved": [],
-        },
-        "recommended_refactor_queue": [],
-        "scope": {"files": ["pkg/in_scope.py"], "file_count": 1},
-        "schema_version": 3,
-        "generated_at": "2026-04-02T00:00:00+00:00",
-    }
+        ),
+        baseline_diff=make_baseline_diff(),
+        scope=make_scope(files=["pkg/in_scope.py"], file_count=1),
+    )
 
     try:
         audit.build_baseline_snapshot(

@@ -7,6 +7,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from ._compiler import (
+    RoutingBonusRuleSpec,
+    RoutingRuleConditionSpec,
+    RoutingSignalDefinitionSpec,
+    compile_routing_bonus_specs,
+    compile_routing_signal_specs,
+)
+
 
 BUILT_IN_ROUTING_SIGNAL_SCORES = {
     "module_package_shadow": 5,
@@ -485,76 +493,55 @@ def _append_missing_queue_order_items(
     return normalized
 
 
+def _build_routing_signal_definition(
+    spec: RoutingSignalDefinitionSpec,
+) -> RoutingSignalDefinition:
+    return RoutingSignalDefinition(
+        name=spec.name,
+        kind=spec.kind,
+        pattern_text=spec.pattern_text,
+        pattern=spec.pattern,
+        points=spec.points,
+        points_per=spec.points_per,
+        max_points=spec.max_points,
+    )
+
+
+def _build_routing_rule_condition(
+    spec: RoutingRuleConditionSpec,
+) -> RoutingRuleCondition:
+    return RoutingRuleCondition(
+        source=spec.source,
+        name=spec.name,
+        op=spec.op,
+        value=spec.value,
+    )
+
+
+def _build_routing_bonus_rule(
+    spec: RoutingBonusRuleSpec,
+) -> RoutingBonusRule:
+    return RoutingBonusRule(
+        name=spec.name,
+        points=spec.points,
+        all_conditions=tuple(
+            _build_routing_rule_condition(condition)
+            for condition in spec.all_conditions
+        ),
+    )
+
+
 def _compile_routing_signal_definitions(
     *,
     name: str,
     raw_profile: Mapping[str, Any],
 ) -> tuple[RoutingSignalDefinition, ...]:
-    raw_signals = raw_profile.get("signals", [])
-    if raw_signals in (None, ""):
-        return ()
-    if not isinstance(raw_signals, list):
-        raise ValueError(f"tool.cremona.profiles.{name}.signals must be an array of tables.")
-    reserved_names = set(BUILT_IN_ROUTING_SIGNAL_SCORES)
-    seen_names: set[str] = set()
-    compiled: list[RoutingSignalDefinition] = []
-    for index, item in enumerate(raw_signals):
-        if not isinstance(item, Mapping):
-            raise ValueError(f"tool.cremona.profiles.{name}.signals[{index}] must be a table.")
-        signal_name = str(item.get("name") or "").strip()
-        if not signal_name:
-            raise ValueError(f"tool.cremona.profiles.{name}.signals[{index}] is missing name.")
-        if signal_name in reserved_names or signal_name in seen_names:
-            raise ValueError(
-                f"tool.cremona.profiles.{name}.signals reuses reserved or duplicate name {signal_name!r}."
-            )
-        kind = str(item.get("kind") or "").strip()
-        pattern_text = str(item.get("pattern") or "")
-        if kind not in {"regex_flag", "regex_count"}:
-            raise ValueError(
-                f"tool.cremona.profiles.{name}.signals[{index}] uses unsupported kind {kind!r}."
-            )
-        try:
-            pattern = re.compile(pattern_text)
-        except re.error as exc:
-            raise ValueError(
-                f"tool.cremona.profiles.{name}.signals[{index}] has invalid regex pattern."
-            ) from exc
-        if kind == "regex_flag":
-            points = int(item.get("points") or 0)
-            if points <= 0:
-                raise ValueError(
-                    f"tool.cremona.profiles.{name}.signals[{index}] requires a positive points value."
-                )
-            compiled.append(
-                RoutingSignalDefinition(
-                    name=signal_name,
-                    kind=kind,
-                    pattern_text=pattern_text,
-                    pattern=pattern,
-                    points=points,
-                )
-            )
-        else:
-            points_per = int(item.get("points_per") or 0)
-            max_points = int(item.get("max_points") or 0)
-            if points_per <= 0 or max_points < 0:
-                raise ValueError(
-                    f"tool.cremona.profiles.{name}.signals[{index}] requires positive points_per "
-                    "and non-negative max_points."
-                )
-            compiled.append(
-                RoutingSignalDefinition(
-                    name=signal_name,
-                    kind=kind,
-                    pattern_text=pattern_text,
-                    pattern=pattern,
-                    points_per=points_per,
-                    max_points=max_points,
-                )
-            )
-        seen_names.add(signal_name)
-    return tuple(compiled)
+    specs = compile_routing_signal_specs(
+        name=name,
+        raw_profile=raw_profile,
+        reserved_names=set(BUILT_IN_ROUTING_SIGNAL_SCORES),
+    )
+    return tuple(_build_routing_signal_definition(spec) for spec in specs)
 
 
 def _compile_routing_bonus_rules(
@@ -563,87 +550,14 @@ def _compile_routing_bonus_rules(
     raw_profile: Mapping[str, Any],
     routing_signal_names: set[str],
 ) -> tuple[RoutingBonusRule, ...]:
-    raw_rules = raw_profile.get("routing_bonuses", [])
-    if raw_rules in (None, ""):
-        return ()
-    if not isinstance(raw_rules, list):
-        raise ValueError(
-            f"tool.cremona.profiles.{name}.routing_bonuses must be an array of tables."
-        )
-    seen_names: set[str] = set()
-    compiled: list[RoutingBonusRule] = []
-    for index, item in enumerate(raw_rules):
-        if not isinstance(item, Mapping):
-            raise ValueError(
-                f"tool.cremona.profiles.{name}.routing_bonuses[{index}] must be a table."
-            )
-        rule_name = str(item.get("name") or "").strip()
-        if not rule_name:
-            raise ValueError(
-                f"tool.cremona.profiles.{name}.routing_bonuses[{index}] is missing name."
-            )
-        if rule_name in seen_names:
-            raise ValueError(
-                f"tool.cremona.profiles.{name}.routing_bonuses reuses name {rule_name!r}."
-            )
-        points = int(item.get("points") or 0)
-        if points <= 0:
-            raise ValueError(
-                f"tool.cremona.profiles.{name}.routing_bonuses[{index}] requires positive points."
-            )
-        raw_conditions = item.get("all", [])
-        if not isinstance(raw_conditions, list) or not raw_conditions:
-            raise ValueError(
-                f"tool.cremona.profiles.{name}.routing_bonuses[{index}].all must be a non-empty list."
-            )
-        compiled_conditions: list[RoutingRuleCondition] = []
-        for condition_index, condition in enumerate(raw_conditions):
-            if not isinstance(condition, Mapping):
-                raise ValueError(
-                    f"tool.cremona.profiles.{name}.routing_bonuses[{index}].all[{condition_index}] "
-                    "must be a table."
-                )
-            source = str(condition.get("source") or "").strip()
-            condition_name = str(condition.get("name") or "").strip()
-            op = str(condition.get("op") or "").strip()
-            value = int(condition.get("value") or 0)
-            if source not in {"signal", "component"}:
-                raise ValueError(
-                    f"tool.cremona.profiles.{name}.routing_bonuses[{index}].all[{condition_index}] "
-                    f"uses unsupported source {source!r}."
-                )
-            if op not in _ALLOWED_RULE_OPERATORS:
-                raise ValueError(
-                    f"tool.cremona.profiles.{name}.routing_bonuses[{index}].all[{condition_index}] "
-                    f"uses unsupported operator {op!r}."
-                )
-            if source == "signal" and condition_name not in routing_signal_names:
-                raise ValueError(
-                    f"tool.cremona.profiles.{name}.routing_bonuses[{index}] references "
-                    f"unknown signal {condition_name!r}."
-                )
-            if source == "component" and condition_name not in _ALLOWED_COMPONENT_NAMES:
-                raise ValueError(
-                    f"tool.cremona.profiles.{name}.routing_bonuses[{index}] references "
-                    f"unknown component {condition_name!r}."
-                )
-            compiled_conditions.append(
-                RoutingRuleCondition(
-                    source=source,
-                    name=condition_name,
-                    op=op,
-                    value=value,
-                )
-            )
-        compiled.append(
-            RoutingBonusRule(
-                name=rule_name,
-                points=points,
-                all_conditions=tuple(compiled_conditions),
-            )
-        )
-        seen_names.add(rule_name)
-    return tuple(compiled)
+    specs = compile_routing_bonus_specs(
+        name=name,
+        raw_profile=raw_profile,
+        routing_signal_names=routing_signal_names,
+        allowed_component_names=set(_ALLOWED_COMPONENT_NAMES),
+        allowed_rule_operators=set(_ALLOWED_RULE_OPERATORS),
+    )
+    return tuple(_build_routing_bonus_rule(spec) for spec in specs)
 
 
 def _compile_subsystem_priority_offsets(

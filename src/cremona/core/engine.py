@@ -8,7 +8,7 @@ import tempfile
 from collections import Counter, defaultdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable, Iterable, Literal
+from typing import Any, Callable, Iterable, Literal, Mapping
 
 from ..profiles import DEFAULT_PROFILE, Profile, empty_routing_signals, get_profile
 from ..python_tools.engine import (
@@ -803,74 +803,74 @@ def agent_routing_sort_key(item: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
-def build_recommended_queue(agent_routing_queue: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _group_agent_routing_queue(
+    agent_routing_queue: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
     grouped: dict[str, list[dict[str, Any]]] = {name: [] for name in QUEUE_ORDER}
     for item in agent_routing_queue:
         grouped.setdefault(item["subsystem"], []).append(item)
+    return grouped
 
-    queue: list[dict[str, Any]] = []
-    for subsystem in QUEUE_ORDER:
-        items = sorted(grouped.get(subsystem, []), key=agent_routing_sort_key)
-        queue.append(
-            {
-                "subsystem": subsystem,
-                "investigate_now": sum(
-                    1
-                    for item in items
-                    if item["priority_band"] == "investigate_now"
-                ),
-                "investigate_soon": sum(
-                    1
-                    for item in items
-                    if item["priority_band"] == "investigate_soon"
-                ),
-                "watch": sum(
-                    1 for item in items if item["priority_band"] == "watch"
-                ),
-                "top_targets": [
-                    {
-                        "file": item["file"],
-                        "priority_band": item["priority_band"],
-                        "priority_score": item["priority_score"],
-                    }
-                    for item in items[:5]
-                ],
-            }
-        )
-    extras = [
+
+def _sorted_subsystem_items(
+    grouped: Mapping[str, list[dict[str, Any]]],
+    subsystem: str,
+) -> list[dict[str, Any]]:
+    return sorted(grouped.get(subsystem, []), key=agent_routing_sort_key)
+
+
+def _priority_band_count(
+    items: list[dict[str, Any]],
+    priority_band: str,
+) -> int:
+    return sum(1 for item in items if item["priority_band"] == priority_band)
+
+
+def _top_targets(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "file": item["file"],
+            "priority_band": item["priority_band"],
+            "priority_score": item["priority_score"],
+        }
+        for item in items[:5]
+    ]
+
+
+def _recommended_queue_entry(
+    *,
+    subsystem: str,
+    items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "subsystem": subsystem,
+        "investigate_now": _priority_band_count(items, "investigate_now"),
+        "investigate_soon": _priority_band_count(items, "investigate_soon"),
+        "watch": _priority_band_count(items, "watch"),
+        "top_targets": _top_targets(items),
+    }
+
+
+def _extra_subsystems(
+    grouped: Mapping[str, list[dict[str, Any]]],
+) -> list[str]:
+    return sorted(
         subsystem
         for subsystem in grouped
         if subsystem not in QUEUE_ORDER and grouped[subsystem]
-    ]
-    for subsystem in sorted(extras):
-        items = sorted(grouped[subsystem], key=agent_routing_sort_key)
-        queue.append(
-            {
-                "subsystem": subsystem,
-                "investigate_now": sum(
-                    1
-                    for item in items
-                    if item["priority_band"] == "investigate_now"
-                ),
-                "investigate_soon": sum(
-                    1
-                    for item in items
-                    if item["priority_band"] == "investigate_soon"
-                ),
-                "watch": sum(
-                    1 for item in items if item["priority_band"] == "watch"
-                ),
-                "top_targets": [
-                    {
-                        "file": item["file"],
-                        "priority_band": item["priority_band"],
-                        "priority_score": item["priority_score"],
-                    }
-                    for item in items[:5]
-                ],
-            }
+    )
+
+
+def build_recommended_queue(agent_routing_queue: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped = _group_agent_routing_queue(agent_routing_queue)
+    ordered_subsystems = [*QUEUE_ORDER, *_extra_subsystems(grouped)]
+    return [
+        _recommended_queue_entry(
+            subsystem=subsystem,
+            items=_sorted_subsystem_items(grouped, subsystem),
         )
-    return queue
+        for subsystem in ordered_subsystems
+    ]
 
 
 def build_baseline_diff(
