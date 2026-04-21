@@ -651,11 +651,15 @@ def admin_group() -> None:
     assert candidates == []
 
 
-def test_load_audit_config_rejects_removed_profile_name(tmp_path: Path) -> None:
+def test_load_audit_config_treats_undefined_legacy_profile_name_as_unknown_profile(
+    tmp_path: Path,
+) -> None:
+    """Regression: undefined legacy profile names should use the generic unknown-profile path."""
+    legacy_profile_name = "reco" "leta"
     (tmp_path / "pyproject.toml").write_text(
-        """
+        f"""
 [tool.cremona]
-profile = "recoleta"
+profile = "{legacy_profile_name}"
 """.strip()
         + "\n",
         encoding="utf-8",
@@ -666,11 +670,34 @@ profile = "recoleta"
     except ValueError as exc:
         message = str(exc)
     else:
-        raise AssertionError("Expected removed profile name to be rejected")
+        raise AssertionError("Expected unknown profile to be rejected")
 
-    assert "recoleta" in message
-    assert "removed" in message
-    assert "tool.cremona.profiles" in message
+    assert f"Unknown profile {legacy_profile_name!r}" in message
+    assert "Available profiles:" in message
+
+
+def test_load_audit_config_accepts_custom_profile_named_like_legacy_repo(
+    tmp_path: Path,
+) -> None:
+    """Regression: a repo-specific profile may reuse the legacy project name without special handling."""
+    legacy_profile_name = "reco" "leta"
+    (tmp_path / "pyproject.toml").write_text(
+        f"""
+[tool.cremona]
+profile = "{legacy_profile_name}"
+
+[tool.cremona.profiles.{legacy_profile_name}]
+base = "generic-python"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config = audit.load_audit_config(repo_root=tmp_path)
+
+    assert config.profile == legacy_profile_name
+    assert legacy_profile_name in config.profile_registry
+    assert audit.get_profile(legacy_profile_name, config.profile_registry).name == legacy_profile_name
 
 
 def test_load_audit_config_compiles_declared_profile(tmp_path: Path) -> None:

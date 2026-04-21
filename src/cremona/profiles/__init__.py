@@ -34,7 +34,6 @@ DEFAULT_DEAD_CODE_IGNORED_DECORATORS = frozenset(
     }
 )
 
-REMOVED_PROFILES = frozenset({"recoleta"})
 _ALLOWED_RULE_OPERATORS = frozenset({">=", ">", "<=", "<", "==", "!="})
 _ALLOWED_COMPONENT_NAMES = frozenset(
     {
@@ -311,11 +310,6 @@ def get_profile(name: str, registry: Mapping[str, Profile] | None = None) -> Pro
     profiles = registry or _BUILT_IN_PROFILES
     if name in profiles:
         return profiles[name]
-    if name in REMOVED_PROFILES:
-        raise ValueError(
-            "Built-in profile 'recoleta' was removed. Define a repo-specific profile "
-            "under [tool.cremona.profiles.<name>] and use that name instead."
-        )
     available = ", ".join(sorted(profiles))
     raise ValueError(f"Unknown profile {name!r}. Available profiles: {available}")
 
@@ -323,11 +317,6 @@ def get_profile(name: str, registry: Mapping[str, Profile] | None = None) -> Pro
 def _compile_custom_profile(name: str, raw_profile: Any) -> Profile:
     if name in _BUILT_IN_PROFILES:
         raise ValueError(f"Cannot redefine built-in Cremona profile {name!r}.")
-    if name in REMOVED_PROFILES:
-        raise ValueError(
-            "Profile name 'recoleta' is reserved and no longer supported. "
-            "Choose a repo-specific profile name under [tool.cremona.profiles.<name>]."
-        )
     if not isinstance(raw_profile, Mapping):
         raise ValueError(f"tool.cremona.profiles.{name} must be a table.")
 
