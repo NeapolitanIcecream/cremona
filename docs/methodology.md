@@ -41,10 +41,14 @@ data instead of `unknown`.
   count.
 - `complexipy` is the main signal for "hard to change safely."
 - `vulture` only produces review candidates. It is not permission to delete
-  code automatically.
+  code automatically. The default threshold is conservative by design; it is a
+  review gate, not a wide-recall dead-code sweep.
 - The file-level routing queue is the main prioritization view. It combines
   static pressure, change frequency, churn, coupling, routing signals,
   dead-code concentration, and optional coverage risk.
+- A file with any `refactor_now` hotspot must reach at least
+  `investigate_soon` in the routing queue, even when churn and coupling are
+  low.
 - `debt_status` is the regression verdict. `routing_pressure` is advisory.
 - `signal_health=partial` is a real downgrade. The queue is still useful, but
   missing history or coverage removes part of the scoring signal.

@@ -100,6 +100,10 @@ Repository-specific behavior belongs in the target repository config. Define a
 custom profile under `[tool.cremona.profiles.<name>]` and select it with
 `tool.cremona.profile` or `--profile`.
 
+Keep `generic-python` as the shared default baseline. Use a repo-specific
+profile only for local prioritization rules, such as lowering `tests` relative
+to `src`.
+
 ```toml
 [tool.cremona]
 profile = "workflow-app"
@@ -142,6 +146,7 @@ Profile rules support:
 
 - Subsystem classification with `subsystems` and `fallback_subsystem`
 - Queue ordering with `queue_order`
+- Subsystem-specific queue offsets with `subsystem_priority_offsets`
 - Custom routing signals with `regex_flag` and `regex_count`
 - Cross-signal routing bonuses with `routing_bonuses`
 - Extra vulture decorator ignores with `dead_code.ignored_decorators`
