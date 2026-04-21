@@ -106,7 +106,7 @@ def test_parse_ruff_findings_reads_c901_json(tmp_path: Path) -> None:
 def test_parse_lizard_findings_reads_csv_thresholds(tmp_path: Path) -> None:
     lookup = _lookup_for(tmp_path, "pkg/mod.py")
     raw_text = (
-        '151,31,1241,7,154,"branchy@42-196@pkg/mod.py","pkg/mod.py",'
+        '200,31,1241,10,154,"branchy@42-196@pkg/mod.py","pkg/mod.py",'
         '"branchy","branchy( a, b, c, d, e, f, g )",42,196\n'
     )
 
@@ -120,8 +120,59 @@ def test_parse_lizard_findings_reads_csv_thresholds(tmp_path: Path) -> None:
     finding = findings[0]
     assert finding.severity == "critical"
     assert finding.metrics["ccn"] == 31
-    assert finding.metrics["nloc"] == 151
-    assert finding.metrics["parameter_count"] == 7
+    assert finding.metrics["nloc"] == 200
+    assert finding.metrics["parameter_count"] == 10
+
+
+def test_parse_lizard_findings_applies_updated_nloc_bands(tmp_path: Path) -> None:
+    lookup = _lookup_for(tmp_path, "pkg/mod.py")
+
+    for nloc, expected in [
+        (99, None),
+        (100, "warning"),
+        (149, "warning"),
+        (150, "high"),
+        (199, "high"),
+        (200, "critical"),
+    ]:
+        raw_text = (
+            f'{nloc},10,1241,3,154,"branchy@42-196@pkg/mod.py","pkg/mod.py",'
+            '"branchy","branchy( a, b, c )",42,196\n'
+        )
+
+        findings = audit.parse_lizard_findings(
+            raw_text=raw_text,
+            lookup=lookup,
+            config=CONFIG,
+        )
+
+        actual = findings[0].severity if findings else None
+        assert actual == expected
+
+
+def test_parse_lizard_findings_applies_updated_parameter_bands(tmp_path: Path) -> None:
+    lookup = _lookup_for(tmp_path, "pkg/mod.py")
+
+    for parameter_count, expected in [
+        (6, None),
+        (7, "warning"),
+        (8, "warning"),
+        (9, "high"),
+        (10, "critical"),
+    ]:
+        raw_text = (
+            f'50,10,1241,{parameter_count},154,"branchy@42-196@pkg/mod.py","pkg/mod.py",'
+            '"branchy","branchy( a, b, c )",42,196\n'
+        )
+
+        findings = audit.parse_lizard_findings(
+            raw_text=raw_text,
+            lookup=lookup,
+            config=CONFIG,
+        )
+
+        actual = findings[0].severity if findings else None
+        assert actual == expected
 
 
 def test_parse_complexipy_findings_reads_json_thresholds(tmp_path: Path) -> None:
@@ -287,6 +338,30 @@ def test_parse_vulture_candidates_reads_text_output(tmp_path: Path) -> None:
     assert candidate["classification"] == "high_confidence_candidate"
     assert candidate["confidence"] == 82
     assert candidate["symbol"] == "unused_helper"
+
+
+def test_parse_vulture_candidates_applies_updated_confidence_bands(
+    tmp_path: Path,
+) -> None:
+    lookup = _lookup_for(tmp_path, "pkg/mod.py")
+
+    for confidence, expected in [
+        (69, []),
+        (70, ["review_candidate"]),
+        (80, ["high_confidence_candidate"]),
+    ]:
+        raw_text = (
+            "pkg/mod.py:18: unused function 'unused_helper' "
+            f"({confidence}% confidence, 12 lines)\n"
+        )
+
+        candidates = audit.parse_vulture_candidates(
+            raw_text=raw_text,
+            lookup=lookup,
+            config=CONFIG,
+        )
+
+        assert [item["classification"] for item in candidates] == expected
 
 
 def test_parse_vulture_candidates_ignores_pydantic_validator_methods(
@@ -598,7 +673,7 @@ def entrypoint() -> None:
     )
 
     candidates = audit.parse_vulture_candidates(
-        raw_text="pkg/cli.py:5: unused function 'entrypoint' (60% confidence)\n",
+        raw_text="pkg/cli.py:5: unused function 'entrypoint' (70% confidence)\n",
         lookup=lookup,
         config=config,
     )
@@ -1311,6 +1386,79 @@ def test_build_agent_routing_queue_prioritizes_high_churn_ambiguous_file() -> No
     assert queue[1]["hotspot_summary"]["monitor"] == 1
 
 
+def test_build_agent_routing_queue_raises_refactor_now_file_to_investigate_soon() -> None:
+    queue = audit.build_agent_routing_queue(
+        scope_files=["pkg/refactor_now.py", "pkg/churny.py"],
+        hotspots=[
+            {
+                "id": "pkg/refactor_now.py::branchy",
+                "file": "pkg/refactor_now.py",
+                "symbol": "branchy",
+                "classification": "refactor_now",
+                "subsystem": "other",
+                "tool_count": 2,
+                "tools": ["lizard", "complexipy"],
+                "metrics": {
+                    "lizard": {"ccn": 31, "nloc": 120, "parameter_count": 4},
+                    "complexipy": {"complexity": 55},
+                },
+            }
+        ],
+        dead_code_candidates=[],
+        history_summary={
+            "status": "available",
+            "max_commit_frequency": 10,
+            "max_churn": 1000,
+            "files": {
+                "pkg/refactor_now.py": {
+                    "commit_frequency": 1,
+                    "churn": 10,
+                    "top_coupled_files": [],
+                },
+                "pkg/churny.py": {
+                    "commit_frequency": 10,
+                    "churn": 1000,
+                    "top_coupled_files": [
+                        {
+                            "file": "pkg/churny_helpers.py",
+                            "shared_commits": 4,
+                            "in_scope": False,
+                        }
+                    ],
+                },
+            },
+        },
+        coverage_summary={
+            "status": "available",
+            "files": {
+                "pkg/refactor_now.py": {"mode": "branch", "fraction": 0.95},
+                "pkg/churny.py": {"mode": "branch", "fraction": 0.95},
+            },
+        },
+        routing_index={
+            "pkg/refactor_now.py": {
+                "module_package_shadow": 0,
+                "wildcard_reexport": 0,
+                "facade_reexport": 0,
+            },
+            "pkg/churny.py": {
+                "module_package_shadow": 0,
+                "wildcard_reexport": 0,
+                "facade_reexport": 0,
+            },
+        },
+    )
+
+    refactor_now_file = next(
+        item for item in queue if item["file"] == "pkg/refactor_now.py"
+    )
+    churny_file = next(item for item in queue if item["file"] == "pkg/churny.py")
+
+    assert refactor_now_file["priority_score"] == 35
+    assert refactor_now_file["priority_band"] == "investigate_soon"
+    assert churny_file["priority_band"] in {"investigate_now", "investigate_soon"}
+
+
 def test_build_agent_routing_queue_applies_declared_routing_bonus_rules(
     tmp_path: Path,
 ) -> None:
@@ -1615,7 +1763,7 @@ def test_build_baseline_diff_ignores_same_band_lizard_nloc_growth() -> None:
                 "symbol": "branchy",
                 "classification": "monitor",
                 "tools": ["lizard"],
-                "metrics": {"lizard": {"ccn": 10, "nloc": 97, "parameter_count": 4}},
+                "metrics": {"lizard": {"ccn": 10, "nloc": 117, "parameter_count": 4}},
             }
         ],
         "dead_code_candidates": [],
@@ -1627,7 +1775,7 @@ def test_build_baseline_diff_ignores_same_band_lizard_nloc_growth() -> None:
             "symbol": "branchy",
             "classification": "monitor",
             "tools": ["lizard"],
-            "metrics": {"lizard": {"ccn": 10, "nloc": 105, "parameter_count": 4}},
+            "metrics": {"lizard": {"ccn": 10, "nloc": 125, "parameter_count": 4}},
         }
     ]
 
@@ -1651,7 +1799,7 @@ def test_build_baseline_diff_ignores_new_monitor_lizard_nloc_hotspot() -> None:
             "symbol": "wrapped",
             "classification": "monitor",
             "tools": ["lizard"],
-            "metrics": {"lizard": {"ccn": 8, "nloc": 82, "parameter_count": 3}},
+            "metrics": {"lizard": {"ccn": 8, "nloc": 102, "parameter_count": 3}},
         }
     ]
 
@@ -2363,7 +2511,7 @@ def unused_helper() -> str:
         "recommended_refactor_queue",
     }
     assert payload["hotspots"]
-    assert payload["dead_code_candidates"]
+    assert payload["dead_code_candidates"] == []
 
 
 def test_refactor_audit_cli_bootstraps_baseline_from_repo_config(tmp_path: Path) -> None:

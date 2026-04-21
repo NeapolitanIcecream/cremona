@@ -60,16 +60,16 @@ ccn_warning_max = 19
 ccn_high_min = 20
 ccn_high_max = 29
 ccn_critical_min = 30
-nloc_warning_min = 80
-nloc_warning_max = 119
-nloc_high_min = 120
-nloc_high_max = 149
-nloc_critical_min = 150
-parameter_warning_min = 6
-parameter_warning_max = 7
-parameter_high_min = 8
-parameter_high_max = 8
-parameter_critical_min = 9
+nloc_warning_min = 100
+nloc_warning_max = 149
+nloc_high_min = 150
+nloc_high_max = 199
+nloc_critical_min = 200
+parameter_warning_min = 7
+parameter_warning_max = 8
+parameter_high_min = 9
+parameter_high_max = 9
+parameter_critical_min = 10
 
 [tool.cremona.complexipy]
 warning_min = 16
@@ -79,7 +79,7 @@ high_max = 49
 critical_min = 50
 
 [tool.cremona.vulture]
-review_candidate_min = 60
+review_candidate_min = 70
 high_confidence_candidate_min = 80
 
 [tool.cremona.history]

@@ -674,6 +674,12 @@ def _coverage_risk_score(coverage_entry: dict[str, Any]) -> int:
     return round((1 - float(coverage_fraction)) * 10)
 
 
+def _priority_score_floor(hotspot_summary: dict[str, Any]) -> int:
+    if int(hotspot_summary.get("refactor_now", 0)) > 0:
+        return 35
+    return 0
+
+
 def _routing_priority_components(
     context: RoutingFileContext,
 ) -> tuple[dict[str, int], list[str]]:
@@ -718,7 +724,10 @@ def _routing_priority_components(
 def _build_agent_routing_item(context: RoutingFileContext) -> dict[str, Any]:
     hotspot_summary = _summarize_file_hotspots(context.file_hotspots)
     priority_components, routing_rules_triggered = _routing_priority_components(context)
-    priority_score = max(0, min(100, sum(priority_components.values())))
+    priority_score = max(
+        _priority_score_floor(hotspot_summary),
+        max(0, min(100, sum(priority_components.values()))),
+    )
     return {
         "file": context.file_name,
         "subsystem": infer_subsystem(context.file_name),
