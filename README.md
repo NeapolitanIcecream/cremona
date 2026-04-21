@@ -20,6 +20,24 @@ uv sync --group dev
 uv run cremona --help
 ```
 
+Use the bundled Codex skill when you want Codex to run Cremona's repo audit
+workflow.
+
+When you start Codex inside this repository, it discovers the repo-scoped
+skill automatically from `.agents/skills/cremona-proactive-refactor-audit`.
+Invoke it with `$cremona-proactive-refactor-audit`, or let Codex select it
+when the task matches the skill description.
+
+To install the same skill into your personal Codex setup, invoke the built-in
+installer in Codex and point it at this repository:
+
+```text
+$skill-installer install the skill from https://github.com/NeapolitanIcecream/cremona/tree/main/.agents/skills/cremona-proactive-refactor-audit
+```
+
+Codex should detect the installed skill automatically. If it does not appear,
+restart Codex.
+
 ## Run a scan
 
 Scan the current repository:
