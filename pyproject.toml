@@ -30,7 +30,7 @@ branch = true
 source = ["src", "tests"]
 
 [tool.cremona]
-profile = "generic-python"
+profile = "cremona-self-host"
 targets = ["src", "tests"]
 exclude = [
     ".git",
@@ -42,6 +42,10 @@ exclude = [
 ]
 out_dir = "output/refactor-audit"
 baseline = "quality/refactor-baseline.json"
+
+[tool.cremona.profiles.cremona-self-host]
+base = "generic-python"
+subsystem_priority_offsets = { tests = -10 }
 
 [tool.cremona.ruff]
 warning_min = 11

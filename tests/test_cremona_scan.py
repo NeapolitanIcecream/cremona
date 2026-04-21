@@ -6,7 +6,7 @@ import sys
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal, cast
 
 import cremona.scan as audit
 from cremona.core import engine as core_engine
@@ -466,6 +466,11 @@ def test_load_audit_config_uses_bootstrap_history_defaults(tmp_path: Path) -> No
     assert CONFIG.history.min_shared_commits == config.history.min_shared_commits
 
 
+def test_repository_uses_self_host_profile() -> None:
+    assert CONFIG.profile == "cremona-self-host"
+    assert "cremona-self-host" in CONFIG.profile_registry
+
+
 def test_load_audit_config_rejects_invalid_profile_rules(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text(
         """
@@ -669,7 +674,7 @@ class Bar:
         "Foo::__init__",
         "Bar::__init__",
     ]
-    hotspots = audit.aggregate_hotspots(findings)
+    hotspots = audit.aggregate_hotspots(findings, config=CONFIG)
     assert len(hotspots) == 2
 
 
@@ -681,14 +686,15 @@ def test_aggregate_hotspots_marks_single_warning_as_monitor() -> None:
                 severity="warning",
                 metrics={"complexity": 12},
             )
-        ]
+        ],
+        config=CONFIG,
     )
 
     assert len(hotspots) == 1
     assert hotspots[0]["classification"] == "monitor"
 
 
-def test_aggregate_hotspots_marks_two_warning_tools_as_refactor_soon() -> None:
+def test_aggregate_hotspots_keeps_two_warning_tools_at_monitor() -> None:
     hotspots = audit.aggregate_hotspots(
         [
             _signal(
@@ -701,7 +707,33 @@ def test_aggregate_hotspots_marks_two_warning_tools_as_refactor_soon() -> None:
                 severity="warning",
                 metrics={"ccn": 16, "nloc": 90, "parameter_count": 4},
             ),
-        ]
+        ],
+        config=CONFIG,
+    )
+
+    assert hotspots[0]["classification"] == "monitor"
+
+
+def test_aggregate_hotspots_marks_three_warning_tools_as_refactor_soon() -> None:
+    hotspots = audit.aggregate_hotspots(
+        [
+            _signal(
+                tool="ruff",
+                severity="warning",
+                metrics={"complexity": 12},
+            ),
+            _signal(
+                tool="lizard",
+                severity="warning",
+                metrics={"ccn": 16, "nloc": 90, "parameter_count": 4},
+            ),
+            _signal(
+                tool="complexipy",
+                severity="warning",
+                metrics={"complexity": 18},
+            ),
+        ],
+        config=CONFIG,
     )
 
     assert hotspots[0]["classification"] == "refactor_soon"
@@ -715,10 +747,27 @@ def test_aggregate_hotspots_marks_critical_complexity_as_refactor_now() -> None:
                 severity="critical",
                 metrics={"complexity": 55},
             )
-        ]
+        ],
+        config=CONFIG,
     )
 
     assert hotspots[0]["classification"] == "refactor_now"
+
+
+def test_aggregate_hotspots_keeps_nloc_only_critical_at_refactor_soon() -> None:
+    """Regression: long functions should not become refactor_now without critical CCN."""
+    hotspots = audit.aggregate_hotspots(
+        [
+            _signal(
+                tool="lizard",
+                severity="critical",
+                metrics={"ccn": 3, "nloc": 180, "parameter_count": 0},
+            )
+        ],
+        config=CONFIG,
+    )
+
+    assert hotspots[0]["classification"] == "refactor_soon"
 
 
 def test_aggregate_hotspots_marks_critical_ruff_as_refactor_soon() -> None:
@@ -729,10 +778,22 @@ def test_aggregate_hotspots_marks_critical_ruff_as_refactor_soon() -> None:
                 severity="critical",
                 metrics={"complexity": 26},
             )
-        ]
+        ],
+        config=CONFIG,
     )
 
     assert hotspots[0]["classification"] == "refactor_soon"
+
+
+def test_aggregate_hotspots_requires_explicit_config() -> None:
+    try:
+        cast(Any, audit.aggregate_hotspots)([])
+    except TypeError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("Expected aggregate_hotspots() without config to fail")
+
+    assert "config" in message
 
 
 def test_build_history_summary_reads_commit_frequency_churn_and_coupling() -> None:
@@ -1344,6 +1405,72 @@ all = [
     assert queue[0]["routing_rules_triggered"] == ["migration_pressure"]
 
 
+def test_build_agent_routing_queue_applies_subsystem_priority_offsets(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[tool.cremona]
+profile = "workflow-app"
+
+[tool.cremona.profiles.workflow-app]
+base = "generic-python"
+subsystem_priority_offsets = { tests = -10 }
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    config = audit.load_audit_config(repo_root=tmp_path)
+    profile = audit.get_profile("workflow-app", config.profile_registry)
+
+    with _use_profile(profile):
+        queue = audit.build_agent_routing_queue(
+            scope_files=["src/core.py", "tests/test_core.py"],
+            hotspots=[],
+            dead_code_candidates=[],
+            history_summary={
+                "status": "available",
+                "max_commit_frequency": 10,
+                "max_churn": 500,
+                "files": {
+                    "src/core.py": {
+                        "commit_frequency": 4,
+                        "churn": 200,
+                        "top_coupled_files": [],
+                    },
+                    "tests/test_core.py": {
+                        "commit_frequency": 6,
+                        "churn": 250,
+                        "top_coupled_files": [],
+                    },
+                },
+            },
+            coverage_summary={
+                "status": "available",
+                "files": {
+                    "src/core.py": {"mode": "branch", "fraction": 0.9},
+                    "tests/test_core.py": {"mode": "branch", "fraction": 1.0},
+                },
+            },
+            routing_index={
+                "src/core.py": {
+                    "module_package_shadow": 0,
+                    "wildcard_reexport": 0,
+                    "facade_reexport": 0,
+                },
+                "tests/test_core.py": {
+                    "module_package_shadow": 0,
+                    "wildcard_reexport": 0,
+                    "facade_reexport": 0,
+                },
+            },
+        )
+
+    assert queue[0]["file"] == "src/core.py"
+    assert queue[1]["file"] == "tests/test_core.py"
+    assert queue[1]["priority_components"]["subsystem_priority_score"] == -10
+
+
 def test_build_repo_verdict_reports_routing_pressure_separately_from_debt_status() -> None:
     verdict = audit.build_repo_verdict(
         hotspots=[
@@ -1839,6 +1966,7 @@ def test_build_baseline_snapshot_merges_partial_scope_updates() -> None:
                     "change_score": 10,
                     "coupling_score": 0,
                     "static_score": 5,
+                    "subsystem_priority_score": 0,
                     "routing_signal_score": 0,
                     "routing_bonus_score": 0,
                     "dead_code_score": 3,
@@ -1959,6 +2087,7 @@ def test_build_baseline_snapshot_merges_partial_scope_updates() -> None:
                     "change_score": 10,
                     "coupling_score": 0,
                     "static_score": 3,
+                    "subsystem_priority_score": 0,
                     "routing_signal_score": 0,
                     "routing_bonus_score": 0,
                     "dead_code_score": 0,
@@ -2087,6 +2216,7 @@ def test_build_baseline_snapshot_rejects_legacy_baseline_schema() -> None:
                     "change_score": 2,
                     "coupling_score": 0,
                     "static_score": 0,
+                    "subsystem_priority_score": 0,
                     "routing_signal_score": 0,
                     "routing_bonus_score": 0,
                     "dead_code_score": 0,

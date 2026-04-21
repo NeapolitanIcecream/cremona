@@ -33,6 +33,7 @@ _ALLOWED_COMPONENT_NAMES = frozenset(
         "change_score",
         "coupling_score",
         "static_score",
+        "subsystem_priority_score",
         "routing_signal_score",
         "dead_code_score",
         "coverage_risk_score",
@@ -172,6 +173,7 @@ class Profile:
     subsystem_rules: tuple[SubsystemRule, ...]
     routing_signal_definitions: tuple[RoutingSignalDefinition, ...]
     routing_bonus_rules: tuple[RoutingBonusRule, ...]
+    subsystem_priority_offsets: Mapping[str, int]
     dead_code_ignored_decorators: frozenset[str]
     classifier_kind: str = "generic-top-level"
 
@@ -191,6 +193,9 @@ class Profile:
 
     def empty_routing_signals(self) -> dict[str, int]:
         return {name: 0 for name in self.routing_signal_names}
+
+    def subsystem_priority_score(self, subsystem: str) -> int:
+        return int(self.subsystem_priority_offsets.get(subsystem, 0))
 
     def build_routing_index(
         self,
@@ -262,6 +267,7 @@ GENERIC_PYTHON_PROFILE = Profile(
     subsystem_rules=(),
     routing_signal_definitions=(),
     routing_bonus_rules=(),
+    subsystem_priority_offsets={},
     dead_code_ignored_decorators=DEFAULT_DEAD_CODE_IGNORED_DECORATORS,
     classifier_kind="generic-top-level",
 )
@@ -353,6 +359,10 @@ def _compile_custom_profile(name: str, raw_profile: Any) -> Profile:
             *[item.name for item in routing_signal_definitions],
         },
     )
+    subsystem_priority_offsets = _compile_subsystem_priority_offsets(
+        name=name,
+        raw_profile=raw_profile,
+    )
     dead_code_ignored_decorators = _compile_dead_code_ignored_decorators(
         raw_profile=raw_profile,
     )
@@ -363,6 +373,7 @@ def _compile_custom_profile(name: str, raw_profile: Any) -> Profile:
         subsystem_rules=subsystem_rules,
         routing_signal_definitions=routing_signal_definitions,
         routing_bonus_rules=routing_bonus_rules,
+        subsystem_priority_offsets=subsystem_priority_offsets,
         dead_code_ignored_decorators=dead_code_ignored_decorators,
         classifier_kind=classifier_kind,
     )
@@ -633,6 +644,34 @@ def _compile_routing_bonus_rules(
         )
         seen_names.add(rule_name)
     return tuple(compiled)
+
+
+def _compile_subsystem_priority_offsets(
+    *,
+    name: str,
+    raw_profile: Mapping[str, Any],
+) -> dict[str, int]:
+    raw_offsets = raw_profile.get("subsystem_priority_offsets", {})
+    if raw_offsets in (None, ""):
+        return {}
+    if not isinstance(raw_offsets, Mapping):
+        raise ValueError(
+            f"tool.cremona.profiles.{name}.subsystem_priority_offsets must be a table."
+        )
+    compiled: dict[str, int] = {}
+    for subsystem_name, raw_value in raw_offsets.items():
+        key = str(subsystem_name).strip()
+        if not key:
+            raise ValueError(
+                f"tool.cremona.profiles.{name}.subsystem_priority_offsets contains an empty subsystem name."
+            )
+        try:
+            compiled[key] = int(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"tool.cremona.profiles.{name}.subsystem_priority_offsets.{key} must be an integer."
+            ) from exc
+    return dict(sorted(compiled.items()))
 
 
 def _compile_dead_code_ignored_decorators(
