@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import AuditConfig, CoverageConfig, HistoryConfig, LizardBands, MetricBands, VultureBands
-from ..profiles import DEFAULT_PROFILE
+from ..profiles import DEFAULT_PROFILE, build_profile_registry, get_profile
 
 REPO_ROOT = Path.cwd()
 
@@ -80,9 +80,13 @@ def load_audit_config(*, repo_root: Path = REPO_ROOT) -> AuditConfig:
                     config_data[key] = merged
                 else:
                     config_data[key] = value
+    profile_registry = build_profile_registry(config_data)
+    profile_name = str(config_data.get("profile") or DEFAULT_PROFILE.name)
+    get_profile(profile_name, profile_registry)
     return AuditConfig(
         repo_root=repo_root,
-        profile=str(config_data.get("profile") or DEFAULT_PROFILE.name),
+        profile=profile_name,
+        profile_registry=profile_registry,
         targets=tuple(config_data["targets"]),
         exclude=tuple(config_data["exclude"]),
         out_dir=resolve_repo_path(repo_root, str(config_data["out_dir"])),
@@ -152,5 +156,4 @@ def resolve_repo_path(repo_root: Path, value: str) -> Path:
     if candidate.is_absolute():
         return candidate
     return (repo_root / candidate).resolve()
-
 

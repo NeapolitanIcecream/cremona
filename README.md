@@ -4,16 +4,12 @@
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.12%2B-blue.svg)](#install)
 
-Cremona is a proactive refactoring audit for Python repositories. It combines
+Cremona is a proactive refactoring audit for Python repositories. It runs
 `ruff` C901, `lizard`, `complexipy`, `vulture`, git history, and optional
-coverage data into one report that answers two questions:
+coverage data, then answers two questions:
 
 - Is structural debt regressing?
 - Which files are the best next refactor targets?
-
-The first release was extracted from `recoleta` and keeps a built-in
-`recoleta` profile for compatibility, but the default behavior is generic for
-Python repositories.
 
 ## Install
 
@@ -26,51 +22,114 @@ uv run cremona --help
 
 ## Run a scan
 
-Scan the current repository with default settings:
+Scan the current repository:
 
 ```bash
 uv run cremona scan
 ```
 
-Scan a specific path:
+Scan an explicit path:
 
 ```bash
 uv run cremona scan /path/to/repo
 ```
 
-Add coverage data:
+Add coverage data when you already have a `coverage.py` JSON export:
 
 ```bash
 uv run cremona scan --coverage-json coverage.json
 ```
 
-Fail the command when the scan introduces structural regressions relative to a
-baseline:
+Fail the command when the current scope regresses relative to the baseline:
 
 ```bash
 uv run cremona scan --fail-on-regression
 ```
 
-## Profiles
+## Bootstrap a baseline
 
-Cremona ships with two profiles:
+Use Cremona as a repo-native gate in three steps:
 
-- `generic-python`: default behavior for normal Python repositories.
-- `recoleta`: preserves `recoleta` subsystem routing and compatibility signals.
+1. Run a full-scope scan and write the first baseline.
+2. Commit `quality/refactor-baseline.json`.
+3. In CI, compare the current scan against that baseline.
 
-Select a profile on the command line:
+Initialize the baseline from `pyproject.toml`:
 
 ```bash
-uv run cremona scan --profile recoleta
+uv run cremona scan --update-baseline
+git add quality/refactor-baseline.json
 ```
 
-Or in `pyproject.toml`:
+Keep coverage in the regression gate so routing can score coverage risk:
+
+```bash
+uv run coverage run -m pytest -q
+uv run coverage json -o coverage.json
+uv run cremona scan --coverage-json coverage.json --fail-on-regression
+```
+
+`schema_version = 3` is a breaking baseline format. Older baselines are not
+read. Regenerate them with `cremona scan --update-baseline`.
+
+## Configure a profile
+
+Cremona ships with one built-in profile:
+
+- `generic-python`
+
+Repository-specific behavior belongs in the target repository config. Define a
+custom profile under `[tool.cremona.profiles.<name>]` and select it with
+`tool.cremona.profile` or `--profile`.
 
 ```toml
 [tool.cremona]
-profile = "generic-python"
-targets = ["src"]
+profile = "workflow-app"
+targets = ["app", "tests"]
+
+[tool.cremona.profiles.workflow-app]
+base = "generic-python"
+queue_order = ["pipeline", "cli", "other"]
+fallback_subsystem = "other"
+
+[[tool.cremona.profiles.workflow-app.subsystems]]
+name = "pipeline"
+include = ["app/pipeline/**"]
+
+[[tool.cremona.profiles.workflow-app.subsystems]]
+name = "cli"
+include = ["app/cli/**"]
+
+[[tool.cremona.profiles.workflow-app.signals]]
+name = "kwargs_bridge_hits"
+kind = "regex_count"
+pattern = '\\blegacy_[A-Za-z0-9_]*\\b'
+points_per = 10
+max_points = 6
+
+[[tool.cremona.profiles.workflow-app.routing_bonuses]]
+name = "migration_pressure"
+points = 4
+all = [
+  { source = "signal", name = "kwargs_bridge_hits", op = ">=", value = 25 },
+  { source = "component", name = "coupling_score", op = ">=", value = 10 },
+]
+
+[tool.cremona.profiles.workflow-app.dead_code]
+ignored_decorators = ["workflow_entrypoint"]
+inherit_default_ignored_decorators = true
 ```
+
+Profile rules support:
+
+- Subsystem classification with `subsystems` and `fallback_subsystem`
+- Queue ordering with `queue_order`
+- Custom routing signals with `regex_flag` and `regex_count`
+- Cross-signal routing bonuses with `routing_bonuses`
+- Extra vulture decorator ignores with `dead_code.ignored_decorators`
+
+Every item in `queue_order` must match a declared subsystem name or the
+`fallback_subsystem`.
 
 ## Output
 
@@ -83,7 +142,7 @@ Cremona writes these files by default:
 - `output/refactor-audit/raw/complexipy.json`
 - `output/refactor-audit/raw/vulture.txt`
 
-The JSON report keeps the current high-value sections:
+The JSON report keeps these top-level sections:
 
 - `summary`
 - `tool_summaries`
@@ -99,9 +158,4 @@ The JSON report keeps the current high-value sections:
 ## Methodology
 
 Read [docs/methodology.md](docs/methodology.md) for the interpretation rules
-behind `debt_status`, `routing_pressure`, and the agent routing queue.
-
-## Provenance
-
-Read [docs/provenance.md](docs/provenance.md) for the extraction source and
-migration history from `recoleta`.
+behind `debt_status`, `routing_pressure`, and the file-level routing queue.

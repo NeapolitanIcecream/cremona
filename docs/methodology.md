@@ -1,6 +1,6 @@
 # Methodology
 
-Use Cremona when you need a low-ambiguity answer to two questions:
+Use Cremona when you need a clear answer to two questions:
 
 1. Is the repository accumulating structural debt?
 2. What should be refactored next?
@@ -14,6 +14,26 @@ Use Cremona when you need a low-ambiguity answer to two questions:
 4. Read `report.md` first for the repo verdict and routing queue.
 5. Read `report.json` when you need symbol-level evidence or baseline details.
 
+## Bootstrap a baseline
+
+When you adopt Cremona on a repository for the first time:
+
+1. Run `cremona scan --update-baseline` on the full configured scope.
+2. Commit `quality/refactor-baseline.json`.
+3. In CI, generate `coverage.json` from the test run and pass it to
+   `cremona scan --coverage-json coverage.json --fail-on-regression`.
+
+That keeps regressions gated against a committed baseline while preserving the
+coverage signal used in routing.
+
+Cremona currently writes `schema_version = 3`. Older baselines are rejected
+instead of migrated in place, so regenerate them with
+`cremona scan --update-baseline` after upgrading across a schema break.
+
+If `coverage.json` omits files that were not executed, configure coverage
+source roots up front so those files still appear with measured line or branch
+data instead of `unknown`.
+
 ## Interpretation rules
 
 - `ruff` C901 is the early warning signal for control-flow growth.
@@ -23,7 +43,7 @@ Use Cremona when you need a low-ambiguity answer to two questions:
 - `vulture` only produces review candidates. It is not permission to delete
   code automatically.
 - The file-level routing queue is the main prioritization view. It combines
-  static pressure, change frequency, churn, coupling, ambiguity signals,
+  static pressure, change frequency, churn, coupling, routing signals,
   dead-code concentration, and optional coverage risk.
 - `debt_status` is the regression verdict. `routing_pressure` is advisory.
 - `signal_health=partial` is a real downgrade. The queue is still useful, but
@@ -33,6 +53,6 @@ Use Cremona when you need a low-ambiguity answer to two questions:
 
 - Behavior changes still require tests.
 - Structural refactors still need regression coverage to stay green.
+- Keep the committed baseline under version control and refresh it only after
+  debt was actually reduced or the schema changed.
 - Do not raise thresholds just to match the current debt level.
-- Update a baseline only after debt was genuinely reduced or the old baseline
-  schema became obsolete.

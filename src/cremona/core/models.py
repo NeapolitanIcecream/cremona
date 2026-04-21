@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from ..python_tools.engine import ScopeLookup
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 HOTSPOT_CLASSIFICATIONS = ("monitor", "refactor_soon", "refactor_now")
 HOTSPOT_CLASSIFICATION_RANK = {
     "monitor": 1,
@@ -85,6 +85,7 @@ class CoverageConfig:
 class AuditConfig:
     repo_root: Path
     profile: str
+    profile_registry: Mapping[str, Profile]
     targets: tuple[str, ...]
     exclude: tuple[str, ...]
     out_dir: Path
@@ -150,7 +151,7 @@ class RoutingFileContext:
     file_name: str
     history_entry: dict[str, Any]
     coverage_entry: dict[str, Any]
-    ambiguity_signals: dict[str, int]
+    routing_signals: dict[str, int]
     file_hotspots: list[dict[str, Any]]
     file_dead_code: list[dict[str, Any]]
     max_commit_frequency: int

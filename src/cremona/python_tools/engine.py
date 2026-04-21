@@ -13,15 +13,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from ..core.models import AuditConfig, HotspotSignal, SEVERITY_RANK
-
-_VULTURE_IGNORED_DECORATORS = frozenset(
-    {
-        "field_validator",
-        "model_validator",
-        "field_serializer",
-        "model_serializer",
-    }
-)
+from ..profiles import DEFAULT_DEAD_CODE_IGNORED_DECORATORS
 
 
 @dataclass(frozen=True)
@@ -35,17 +27,31 @@ class ScopeLookup:
     vulture_ignored_lines_by_path: dict[str, frozenset[int]]
 
     @classmethod
-    def from_files(cls, *, repo_root: Path, files: list[Path]) -> ScopeLookup:
+    def from_files(
+        cls,
+        *,
+        repo_root: Path,
+        files: list[Path],
+        ignored_decorators: frozenset[str] | None = None,
+    ) -> ScopeLookup:
         rel_paths = [relative_path(path, repo_root) for path in files]
         grouped: dict[str, list[str]] = defaultdict(list)
         qualified_names_by_path: dict[str, frozenset[str]] = {}
         qualified_names_by_path_and_leaf: dict[str, dict[str, tuple[str, ...]]] = {}
         qualified_names_by_path_and_line: dict[str, dict[int, str]] = {}
         vulture_ignored_lines_by_path: dict[str, frozenset[int]] = {}
+        active_ignored = (
+            DEFAULT_DEAD_CODE_IGNORED_DECORATORS
+            if ignored_decorators is None
+            else ignored_decorators
+        )
         for rel_path in rel_paths:
             grouped[Path(rel_path).name].append(rel_path)
             path = repo_root / rel_path
-            symbol_index = build_symbol_index(path)
+            symbol_index = build_symbol_index(
+                path,
+                ignored_decorators=active_ignored,
+            )
             qualified_names_by_path[rel_path] = frozenset(
                 symbol_index["qualified_names"]
             )
@@ -140,13 +146,22 @@ class _SymbolIndexBuffers:
     vulture_ignored_lines: set[int]
 
 
-def build_symbol_index(path: Path) -> dict[str, Any]:
+def build_symbol_index(
+    path: Path,
+    *,
+    ignored_decorators: frozenset[str] | None = None,
+) -> dict[str, Any]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     buffers = _SymbolIndexBuffers(
         qualified_names=[],
         by_leaf=defaultdict(list),
         by_line={},
         vulture_ignored_lines=set(),
+    )
+    active_ignored = (
+        DEFAULT_DEAD_CODE_IGNORED_DECORATORS
+        if ignored_decorators is None
+        else ignored_decorators
     )
 
     def walk(node: ast.AST, prefix: str = "", parent_kind: str | None = None) -> None:
@@ -174,6 +189,7 @@ def build_symbol_index(path: Path) -> dict[str, Any]:
                     node=child,
                     qualified=qualified,
                     buffers=buffers,
+                    ignored_decorators=active_ignored,
                 )
                 walk(child, qualified, "function")
 
@@ -208,19 +224,22 @@ def _record_function_symbol(
     node: ast.FunctionDef | ast.AsyncFunctionDef,
     qualified: str,
     buffers: _SymbolIndexBuffers,
+    ignored_decorators: frozenset[str],
 ) -> None:
     buffers.qualified_names.append(qualified)
     buffers.by_line[int(node.lineno)] = qualified
     buffers.by_leaf[node.name].append(qualified)
-    if _has_vulture_ignored_decorator(node):
+    if _has_vulture_ignored_decorator(node, ignored_decorators=ignored_decorators):
         buffers.vulture_ignored_lines.update(_vulture_ignored_line_span(node))
 
 
 def _has_vulture_ignored_decorator(
     node: ast.FunctionDef | ast.AsyncFunctionDef,
+    *,
+    ignored_decorators: frozenset[str],
 ) -> bool:
     return any(
-        _decorator_base_name(decorator) in _VULTURE_IGNORED_DECORATORS
+        _decorator_base_name(decorator) in ignored_decorators
         for decorator in node.decorator_list
     )
 

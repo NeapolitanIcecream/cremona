@@ -12,12 +12,12 @@ import cremona.scan as audit
 from cremona.core import engine as core_engine
 
 CONFIG = audit.load_audit_config(repo_root=Path(__file__).resolve().parents[1])
-audit._set_active_profile(audit.get_profile("recoleta"))
+audit._set_active_profile(audit.get_profile("generic-python"))
 
 
 @contextmanager
-def _use_profile(name: str):
-    previous = audit._set_active_profile(audit.get_profile(name))
+def _use_profile(profile: audit.Profile):
+    previous = audit._set_active_profile(profile)
     try:
         yield
     finally:
@@ -37,7 +37,7 @@ def _lookup_for(tmp_path: Path, *relative_paths: str) -> audit.ScopeLookup:
 def _signal(
     *,
     tool: Literal["ruff", "lizard", "complexipy"],
-    file: str = "recoleta/example.py",
+    file: str = "pkg/example.py",
     symbol: str = "example",
     severity: Literal["warning", "high", "critical"] = "warning",
     metrics: dict[str, int] | None = None,
@@ -57,7 +57,7 @@ def _coverage_payload() -> dict[str, object]:
     return {
         "meta": {"version": "7.0"},
         "files": {
-            "recoleta/branchy.py": {
+            "pkg/branchy.py": {
                 "summary": {
                     "covered_branches": 6,
                     "num_branches": 8,
@@ -65,13 +65,13 @@ def _coverage_payload() -> dict[str, object]:
                     "num_statements": 12,
                 }
             },
-            "recoleta/line_only.py": {
+            "pkg/line_only.py": {
                 "summary": {
                     "covered_lines": 9,
                     "num_statements": 12,
                 }
             },
-            "recoleta/unknown.py": {"summary": {}},
+            "pkg/unknown.py": {"summary": {}},
         },
     }
 
@@ -203,6 +203,309 @@ class Example(BaseModel):
     assert candidates == []
 
 
+def test_parse_vulture_candidates_ignores_cli_entrypoint_decorators(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "pkg" / "cli.py"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        """
+class FakeTyper:
+    def command(self, name: str):
+        def decorator(fn):
+            return fn
+        return decorator
+
+    def callback(self, *, invoke_without_command: bool = False):
+        def decorator(fn):
+            return fn
+        return decorator
+
+    def group(self, name: str):
+        def decorator(fn):
+            return fn
+        return decorator
+
+
+app = FakeTyper()
+
+
+@app.command("freshness")
+def inspect_freshness() -> None:
+    return None
+
+
+@app.callback(invoke_without_command=True)
+def main_callback() -> None:
+    return None
+
+
+@app.group("admin")
+def admin_group() -> None:
+    return None
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    lookup = audit.ScopeLookup.from_files(repo_root=tmp_path, files=[path])
+    raw_text = "\n".join(
+        [
+            "pkg/cli.py:22: unused function 'inspect_freshness' (60% confidence)",
+            "pkg/cli.py:27: unused function 'main_callback' (60% confidence)",
+            "pkg/cli.py:32: unused function 'admin_group' (60% confidence)",
+        ]
+    )
+
+    candidates = audit.parse_vulture_candidates(
+        raw_text=raw_text,
+        lookup=lookup,
+        config=CONFIG,
+    )
+
+    assert candidates == []
+
+
+def test_load_audit_config_rejects_removed_profile_name(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[tool.cremona]
+profile = "recoleta"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    try:
+        audit.load_audit_config(repo_root=tmp_path)
+    except ValueError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("Expected removed profile name to be rejected")
+
+    assert "recoleta" in message
+    assert "removed" in message
+    assert "tool.cremona.profiles" in message
+
+
+def test_load_audit_config_compiles_declared_profile(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[tool.cremona]
+profile = "workflow-app"
+targets = ["app"]
+
+[tool.cremona.profiles.workflow-app]
+base = "generic-python"
+queue_order = ["pipeline", "cli", "other"]
+fallback_subsystem = "other"
+
+[[tool.cremona.profiles.workflow-app.subsystems]]
+name = "pipeline"
+include = ["app/pipeline/**"]
+
+[[tool.cremona.profiles.workflow-app.subsystems]]
+name = "cli"
+include = ["app/cli/**"]
+
+[[tool.cremona.profiles.workflow-app.signals]]
+name = "kwargs_bridge_hits"
+kind = "regex_count"
+pattern = '\\blegacy_[A-Za-z0-9_]*\\b'
+points_per = 10
+max_points = 6
+
+[[tool.cremona.profiles.workflow-app.routing_bonuses]]
+name = "migration_pressure"
+points = 4
+all = [
+  { source = "signal", name = "kwargs_bridge_hits", op = ">=", value = 25 },
+  { source = "component", name = "coupling_score", op = ">=", value = 10 },
+]
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config = audit.load_audit_config(repo_root=tmp_path)
+    profile = config.profile_registry["workflow-app"]
+
+    assert config.profile == "workflow-app"
+    assert tuple(config.profile_registry) == ("generic-python", "workflow-app")
+    assert profile.queue_order == ("pipeline", "cli", "other")
+    assert profile.classify_subsystem("app/pipeline/stage.py") == "pipeline"
+    assert profile.classify_subsystem("app/cli/app.py") == "cli"
+    assert profile.classify_subsystem("app/misc.py") == "other"
+    assert "kwargs_bridge_hits" in profile.routing_signal_names
+
+
+def test_load_audit_config_rejects_invalid_profile_rules(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[tool.cremona]
+profile = "broken"
+
+[tool.cremona.profiles.broken]
+base = "generic-python"
+queue_order = ["missing", "other"]
+fallback_subsystem = "other"
+
+[[tool.cremona.profiles.broken.routing_bonuses]]
+name = "bad_bonus"
+points = 4
+all = [{ source = "component", name = "mystery_score", op = ">=", value = 1 }]
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    try:
+        audit.load_audit_config(repo_root=tmp_path)
+    except ValueError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("Expected invalid custom profile to be rejected")
+
+    assert "queue_order" in message or "mystery_score" in message
+
+
+def test_profile_dead_code_ignored_decorators_can_override_defaults(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[tool.cremona]
+profile = "workflow-app"
+
+[tool.cremona.profiles.workflow-app]
+base = "generic-python"
+fallback_subsystem = "other"
+
+[tool.cremona.profiles.workflow-app.dead_code]
+ignored_decorators = ["workflow_step"]
+inherit_default_ignored_decorators = false
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    config = audit.load_audit_config(repo_root=tmp_path)
+    profile = audit.get_profile("workflow-app", config.profile_registry)
+
+    path = tmp_path / "pkg" / "workflow.py"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        """
+def workflow_step(fn):
+    return fn
+
+
+@workflow_step
+def staged_task() -> None:
+    return None
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    lookup = audit.ScopeLookup.from_files(
+        repo_root=tmp_path,
+        files=[path],
+        ignored_decorators=profile.dead_code_ignored_decorators,
+    )
+
+    candidates = audit.parse_vulture_candidates(
+        raw_text="pkg/workflow.py:5: unused function 'staged_task' (60% confidence)\n",
+        lookup=lookup,
+        config=config,
+    )
+
+    assert candidates == []
+    assert profile.dead_code_ignored_decorators == frozenset({"workflow_step"})
+
+
+def test_profile_dead_code_ignored_decorators_can_be_explicitly_empty(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[tool.cremona]
+profile = "workflow-app"
+
+[tool.cremona.profiles.workflow-app]
+base = "generic-python"
+fallback_subsystem = "other"
+
+[tool.cremona.profiles.workflow-app.dead_code]
+ignored_decorators = []
+inherit_default_ignored_decorators = false
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    config = audit.load_audit_config(repo_root=tmp_path)
+    profile = audit.get_profile("workflow-app", config.profile_registry)
+
+    path = tmp_path / "pkg" / "cli.py"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        """
+def command(fn):
+    return fn
+
+
+@command
+def entrypoint() -> None:
+    return None
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    lookup = audit.ScopeLookup.from_files(
+        repo_root=tmp_path,
+        files=[path],
+        ignored_decorators=profile.dead_code_ignored_decorators,
+    )
+
+    candidates = audit.parse_vulture_candidates(
+        raw_text="pkg/cli.py:5: unused function 'entrypoint' (60% confidence)\n",
+        lookup=lookup,
+        config=config,
+    )
+
+    assert [candidate["symbol"] for candidate in candidates] == ["entrypoint"]
+    assert profile.dead_code_ignored_decorators == frozenset()
+
+
+def test_custom_profile_without_subsystem_rules_keeps_generic_classifier(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[tool.cremona]
+profile = "workflow-app"
+
+[tool.cremona.profiles.workflow-app]
+base = "generic-python"
+
+[[tool.cremona.profiles.workflow-app.signals]]
+name = "kwargs_bridge_hits"
+kind = "regex_count"
+pattern = "\\blegacy_[A-Za-z0-9_]*\\b"
+points_per = 10
+max_points = 6
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config = audit.load_audit_config(repo_root=tmp_path)
+    profile = audit.get_profile("workflow-app", config.profile_registry)
+
+    assert profile.classifier_kind == audit.DEFAULT_PROFILE.classifier_kind
+    assert profile.queue_order == audit.DEFAULT_PROFILE.queue_order
+    assert profile.classify_subsystem("src/pkg/example.py") == "src"
+    assert profile.classify_subsystem("tests/test_example.py") == "tests"
+    assert profile.classify_subsystem("docs/guide.md") == "docs"
+
+
 def test_parse_lizard_findings_keeps_same_leaf_methods_separate(tmp_path: Path) -> None:
     path = tmp_path / "pkg" / "mod.py"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -308,14 +611,14 @@ def test_build_history_summary_reads_commit_frequency_churn_and_coupling() -> No
     raw_text = "\n".join(
         [
             "commit a1",
-            "4\t1\trecoleta/cli/app.py",
-            "1\t0\trecoleta/pipeline/service.py",
+            "4\t1\tpkg/cli/app.py",
+            "1\t0\tpkg/pipeline/service.py",
             "commit b2",
-            "2\t2\trecoleta/cli/app.py",
-            "3\t1\trecoleta/pipeline/service.py",
-            "1\t0\trecoleta/translation.py",
+            "2\t2\tpkg/cli/app.py",
+            "3\t1\tpkg/pipeline/service.py",
+            "1\t0\tpkg/translation.py",
             "commit c3",
-            "5\t0\trecoleta/translation.py",
+            "5\t0\tpkg/translation.py",
             "",
         ]
     )
@@ -323,13 +626,13 @@ def test_build_history_summary_reads_commit_frequency_churn_and_coupling() -> No
     summary = audit.build_history_summary(
         raw_text=raw_text,
         tracked_files={
-            "recoleta/cli/app.py",
-            "recoleta/pipeline/service.py",
-            "recoleta/translation.py",
+            "pkg/cli/app.py",
+            "pkg/pipeline/service.py",
+            "pkg/translation.py",
         },
         current_scope_files=[
-            "recoleta/cli/app.py",
-            "recoleta/pipeline/service.py",
+            "pkg/cli/app.py",
+            "pkg/pipeline/service.py",
         ],
         min_shared_commits=2,
         coupling_ignore_commit_file_count=10,
@@ -339,12 +642,12 @@ def test_build_history_summary_reads_commit_frequency_churn_and_coupling() -> No
     assert summary["status"] == "available"
     assert summary["max_commit_frequency"] == 2
     assert summary["max_churn"] == 9
-    cli_history = summary["files"]["recoleta/cli/app.py"]
+    cli_history = summary["files"]["pkg/cli/app.py"]
     assert cli_history["commit_frequency"] == 2
     assert cli_history["churn"] == 9
     assert cli_history["top_coupled_files"] == [
         {
-            "file": "recoleta/pipeline/service.py",
+            "file": "pkg/pipeline/service.py",
             "shared_commits": 2,
             "in_scope": True,
         }
@@ -359,29 +662,29 @@ def test_build_history_summary_marks_git_unavailable(monkeypatch) -> None:
 
     summary = audit.collect_git_history_summary(
         repo_root=Path.cwd(),
-        targets=["recoleta"],
-        tracked_files={"recoleta/example.py"},
-        current_scope_files=["recoleta/example.py"],
+        targets=["pkg"],
+        tracked_files={"pkg/example.py"},
+        current_scope_files=["pkg/example.py"],
         lookback_days=180,
         min_shared_commits=3,
         coupling_ignore_commit_file_count=25,
     )
 
     assert summary["status"] == "unavailable"
-    assert summary["files"]["recoleta/example.py"]["commit_frequency"] == 0
-    assert summary["files"]["recoleta/example.py"]["top_coupled_files"] == []
+    assert summary["files"]["pkg/example.py"]["commit_frequency"] == 0
+    assert summary["files"]["pkg/example.py"]["top_coupled_files"] == []
 
 
 def test_build_history_summary_ignores_sweep_commit_for_coupling() -> None:
     raw_text = "\n".join(
         [
             "commit a1",
-            "1\t0\trecoleta/a.py",
-            "1\t0\trecoleta/b.py",
-            "1\t0\trecoleta/c.py",
+            "1\t0\tpkg/a.py",
+            "1\t0\tpkg/b.py",
+            "1\t0\tpkg/c.py",
             "commit b2",
-            "1\t0\trecoleta/a.py",
-            "1\t0\trecoleta/b.py",
+            "1\t0\tpkg/a.py",
+            "1\t0\tpkg/b.py",
             "",
         ]
     )
@@ -389,24 +692,24 @@ def test_build_history_summary_ignores_sweep_commit_for_coupling() -> None:
     summary = audit.build_history_summary(
         raw_text=raw_text,
         tracked_files={
-            "recoleta/a.py",
-            "recoleta/b.py",
-            "recoleta/c.py",
+            "pkg/a.py",
+            "pkg/b.py",
+            "pkg/c.py",
         },
         current_scope_files=[
-            "recoleta/a.py",
-            "recoleta/b.py",
-            "recoleta/c.py",
+            "pkg/a.py",
+            "pkg/b.py",
+            "pkg/c.py",
         ],
         min_shared_commits=1,
         coupling_ignore_commit_file_count=2,
         lookback_days=180,
     )
 
-    assert summary["files"]["recoleta/a.py"]["commit_frequency"] == 2
-    assert summary["files"]["recoleta/a.py"]["top_coupled_files"] == [
+    assert summary["files"]["pkg/a.py"]["commit_frequency"] == 2
+    assert summary["files"]["pkg/a.py"]["top_coupled_files"] == [
         {
-            "file": "recoleta/b.py",
+            "file": "pkg/b.py",
             "shared_commits": 1,
             "in_scope": True,
         }
@@ -420,7 +723,7 @@ def test_history_collection_inputs_include_explicit_scope_files_outside_default_
     scope_state = audit.AuditScopeState(
         files=[tmp_path / "main.py"],
         current_scope_files=["main.py"],
-        default_scope_files=("recoleta/example.py",),
+        default_scope_files=("pkg/example.py",),
         is_partial_scope=True,
         lookup=lookup,
         raw_dir=tmp_path,
@@ -442,7 +745,7 @@ def test_history_collection_inputs_include_explicit_scope_files_outside_default_
     )
 
     assert targets == [*CONFIG.targets, "main.py"]
-    assert tracked_files == ("main.py", "recoleta/example.py")
+    assert tracked_files == ("main.py", "pkg/example.py")
 
 
 def test_load_coverage_summary_prefers_branch_then_line_then_unknown(tmp_path: Path) -> None:
@@ -453,27 +756,27 @@ def test_load_coverage_summary_prefers_branch_then_line_then_unknown(tmp_path: P
         coverage_json=coverage_path,
         repo_root=tmp_path,
         tracked_files={
-            "recoleta/branchy.py",
-            "recoleta/line_only.py",
-            "recoleta/unknown.py",
-            "recoleta/missing.py",
+            "pkg/branchy.py",
+            "pkg/line_only.py",
+            "pkg/unknown.py",
+            "pkg/missing.py",
         },
     )
 
     assert coverage["status"] == "available"
-    assert coverage["files"]["recoleta/branchy.py"] == {
+    assert coverage["files"]["pkg/branchy.py"] == {
         "mode": "branch",
         "fraction": 0.75,
     }
-    assert coverage["files"]["recoleta/line_only.py"] == {
+    assert coverage["files"]["pkg/line_only.py"] == {
         "mode": "line",
         "fraction": 0.75,
     }
-    assert coverage["files"]["recoleta/unknown.py"] == {
+    assert coverage["files"]["pkg/unknown.py"] == {
         "mode": "unknown",
         "fraction": None,
     }
-    assert coverage["files"]["recoleta/missing.py"] == {
+    assert coverage["files"]["pkg/missing.py"] == {
         "mode": "unknown",
         "fraction": None,
     }
@@ -502,7 +805,36 @@ def test_coerce_refactor_audit_run_request_uses_config_defaults_for_legacy_kwarg
     assert request.coverage_json == config.coverage.coverage_json
 
 
-def test_build_agent_ambiguity_index_detects_shims_facades_and_legacy(tmp_path: Path) -> None:
+def test_build_agent_routing_index_detects_builtin_and_declared_signals(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[tool.cremona]
+profile = "workflow-app"
+
+[tool.cremona.profiles.workflow-app]
+base = "generic-python"
+fallback_subsystem = "other"
+
+[[tool.cremona.profiles.workflow-app.signals]]
+name = "kwargs_bridge_hits"
+kind = "regex_count"
+pattern = '\\blegacy_[A-Za-z0-9_]*\\b'
+points_per = 10
+max_points = 6
+
+[[tool.cremona.profiles.workflow-app.signals]]
+name = "request_wrapper"
+kind = "regex_flag"
+pattern = 'request\\s*:\\s*[^=\\n]+?\\|\\s*None\\s*=\\s*None'
+points = 2
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    config = audit.load_audit_config(repo_root=tmp_path)
+    profile = audit.get_profile("workflow-app", config.profile_registry)
     shadow_module = tmp_path / "pkg" / "cli.py"
     shadow_module.parent.mkdir(parents=True, exist_ok=True)
     shadow_module.write_text(
@@ -541,29 +873,24 @@ def wrapper(*, request: object | None = None, **legacy_kwargs: Any) -> object:
         encoding="utf-8",
     )
 
-    index = audit.build_agent_ambiguity_index(
-        repo_root=tmp_path,
-        files=[shadow_module, facade_path, compat_path],
-    )
+    with _use_profile(profile):
+        index = audit.build_agent_routing_index(
+            repo_root=tmp_path,
+            files=[shadow_module, facade_path, compat_path],
+        )
 
     assert index["pkg/cli.py"]["module_package_shadow"] == 1
     assert index["pkg/cli.py"]["wildcard_reexport"] == 1
     assert index["pkg/storage.py"]["facade_reexport"] == 1
-    assert index["pkg/translate.py"]["legacy_keyword_hits"] >= 2
-    assert index["pkg/translate.py"]["compat_request_wrapper"] == 1
+    assert index["pkg/translate.py"]["kwargs_bridge_hits"] >= 2
+    assert index["pkg/translate.py"]["request_wrapper"] == 1
 
 
-def test_generic_python_profile_keeps_recoleta_rules_out_of_core() -> None:
-    with _use_profile("generic-python"):
-        assert audit.infer_subsystem("recoleta/cli.py") == "recoleta"
+def test_generic_python_profile_uses_top_level_dir_as_subsystem() -> None:
+    assert audit.infer_subsystem("pkg/cli.py") == "pkg"
 
 
-def test_recoleta_profile_preserves_recoleta_specific_subsystem_mapping() -> None:
-    with _use_profile("recoleta"):
-        assert audit.infer_subsystem("recoleta/cli.py") == "cli"
-
-
-def test_generic_python_profile_scans_non_recoleta_fixture_end_to_end(
+def test_generic_python_profile_scans_non_generic_fixture_end_to_end(
     tmp_path: Path,
 ) -> None:
     fixture_root = tmp_path / "generic_project"
@@ -644,13 +971,88 @@ def test_smoke() -> None:
     assert (tmp_path / "audit-out" / "report.json").exists()
 
 
+def test_run_scan_cli_profile_override_beats_repo_default(tmp_path: Path) -> None:
+    fixture_root = tmp_path / "workflow_project"
+    cli_dir = fixture_root / "app" / "cli"
+    cli_dir.mkdir(parents=True)
+    (fixture_root / "pyproject.toml").write_text(
+        """
+[tool.cremona]
+profile = "workflow-app"
+targets = ["app"]
+
+[tool.cremona.profiles.workflow-app]
+base = "generic-python"
+queue_order = ["cli", "other"]
+fallback_subsystem = "other"
+
+[[tool.cremona.profiles.workflow-app.subsystems]]
+name = "cli"
+include = ["app/cli/**"]
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (cli_dir / "hotspot.py").write_text(
+        """
+from __future__ import annotations
+
+
+def branchy(a: bool, b: bool, c: bool, d: bool, e: bool, f: bool) -> int:
+    total = 0
+    if a:
+        total += 1
+    if b:
+        total += 1
+    if c:
+        total += 1
+    if d:
+        total += 1
+    if e:
+        total += 1
+    if f:
+        total += 1
+    if a and b:
+        total += 1
+    if c and d:
+        total += 1
+    if e and f:
+        total += 1
+    if a or c:
+        total += 1
+    if b or d:
+        total += 1
+    if e or a:
+        total += 1
+    return total
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config = audit.load_audit_config(repo_root=fixture_root)
+    report = audit.run_scan(
+        audit.ScanRequest(
+            scope_targets=[str(fixture_root / "app")],
+            out_dir=tmp_path / "audit-out",
+            baseline_path=tmp_path / "baseline.json",
+            config=config,
+            profile="generic-python",
+        )
+    )
+
+    assert report.exit_code == 0
+    assert report["agent_routing_queue"][0]["subsystem"] == "app"
+    assert report["recommended_queue"][0]["subsystem"] == "src"
+
+
 def test_build_agent_routing_queue_prioritizes_high_churn_ambiguous_file() -> None:
     queue = audit.build_agent_routing_queue(
-        scope_files=["recoleta/cli.py", "recoleta/example.py"],
+        scope_files=["pkg/cli.py", "pkg/example.py"],
         hotspots=[
             {
-                "id": "recoleta/example.py::branchy",
-                "file": "recoleta/example.py",
+                "id": "pkg/example.py::branchy",
+                "file": "pkg/example.py",
                 "symbol": "branchy",
                 "classification": "monitor",
                 "subsystem": "other",
@@ -661,8 +1063,8 @@ def test_build_agent_routing_queue_prioritizes_high_churn_ambiguous_file() -> No
         ],
         dead_code_candidates=[
             {
-                "id": "recoleta/cli.py::function::legacy_entrypoint",
-                "file": "recoleta/cli.py",
+                "id": "pkg/cli.py::function::legacy_entrypoint",
+                "file": "pkg/cli.py",
                 "symbol": "legacy_entrypoint",
                 "classification": "review_candidate",
                 "confidence": 60,
@@ -674,18 +1076,18 @@ def test_build_agent_routing_queue_prioritizes_high_churn_ambiguous_file() -> No
             "max_commit_frequency": 10,
             "max_churn": 500,
             "files": {
-                "recoleta/cli.py": {
+                "pkg/cli.py": {
                     "commit_frequency": 10,
                     "churn": 500,
                     "top_coupled_files": [
                         {
-                            "file": "recoleta/cli/app.py",
+                            "file": "pkg/cli/app.py",
                             "shared_commits": 4,
                             "in_scope": False,
                         }
                     ],
                 },
-                "recoleta/example.py": {
+                "pkg/example.py": {
                     "commit_frequency": 1,
                     "churn": 10,
                     "top_coupled_files": [],
@@ -695,111 +1097,123 @@ def test_build_agent_routing_queue_prioritizes_high_churn_ambiguous_file() -> No
         coverage_summary={
             "status": "available",
             "files": {
-                "recoleta/cli.py": {"mode": "unknown", "fraction": None},
-                "recoleta/example.py": {"mode": "branch", "fraction": 0.9},
+                "pkg/cli.py": {"mode": "unknown", "fraction": None},
+                "pkg/example.py": {"mode": "branch", "fraction": 0.9},
             },
         },
-        ambiguity_index={
-            "recoleta/cli.py": {
+        routing_index={
+            "pkg/cli.py": {
                 "module_package_shadow": 1,
                 "wildcard_reexport": 1,
                 "facade_reexport": 0,
-                "legacy_keyword_hits": 6,
-                "compat_request_wrapper": 0,
             },
-            "recoleta/example.py": {
+            "pkg/example.py": {
                 "module_package_shadow": 0,
                 "wildcard_reexport": 0,
                 "facade_reexport": 0,
-                "legacy_keyword_hits": 0,
-                "compat_request_wrapper": 0,
             },
         },
     )
 
-    assert queue[0]["file"] == "recoleta/cli.py"
+    assert queue[0]["file"] == "pkg/cli.py"
     assert queue[0]["priority_band"] in {"investigate_now", "investigate_soon"}
     assert queue[0]["dead_code_candidate_count"] == 1
-    assert queue[1]["file"] == "recoleta/example.py"
+    assert queue[1]["file"] == "pkg/example.py"
     assert queue[1]["hotspot_summary"]["monitor"] == 1
 
 
-def test_build_agent_routing_queue_elevates_compatibility_heavy_file() -> None:
-    queue = audit.build_agent_routing_queue(
-        scope_files=["recoleta/translation.py", "recoleta/example.py"],
-        hotspots=[],
-        dead_code_candidates=[],
-        history_summary={
-            "status": "available",
-            "max_commit_frequency": 20,
-            "max_churn": 1000,
-            "files": {
-                "recoleta/translation.py": {
-                    "commit_frequency": 18,
-                    "churn": 600,
-                    "top_coupled_files": [
-                        {
-                            "file": "recoleta/cli/app.py",
-                            "shared_commits": 7,
-                            "in_scope": False,
-                        },
-                        {
-                            "file": "recoleta/cli/translate.py",
-                            "shared_commits": 7,
-                            "in_scope": False,
-                        },
-                        {
-                            "file": "recoleta/materialize.py",
-                            "shared_commits": 7,
-                            "in_scope": False,
-                        },
-                        {
-                            "file": "recoleta/trends.py",
-                            "shared_commits": 7,
-                            "in_scope": False,
-                        },
-                        {
-                            "file": "recoleta/pipeline/trends_stage.py",
-                            "shared_commits": 6,
-                            "in_scope": False,
-                        },
-                    ],
-                },
-                "recoleta/example.py": {
-                    "commit_frequency": 1,
-                    "churn": 10,
-                    "top_coupled_files": [],
-                },
-            },
-        },
-        coverage_summary={
-            "status": "unavailable",
-            "files": {
-                "recoleta/translation.py": {"mode": "unknown", "fraction": None},
-                "recoleta/example.py": {"mode": "unknown", "fraction": None},
-            },
-        },
-        ambiguity_index={
-            "recoleta/translation.py": {
-                "module_package_shadow": 0,
-                "wildcard_reexport": 0,
-                "facade_reexport": 0,
-                "legacy_keyword_hits": 80,
-                "compat_request_wrapper": 1,
-            },
-            "recoleta/example.py": {
-                "module_package_shadow": 0,
-                "wildcard_reexport": 0,
-                "facade_reexport": 0,
-                "legacy_keyword_hits": 0,
-                "compat_request_wrapper": 0,
-            },
-        },
-    )
+def test_build_agent_routing_queue_applies_declared_routing_bonus_rules(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[tool.cremona]
+profile = "workflow-app"
 
-    assert queue[0]["file"] == "recoleta/translation.py"
+[tool.cremona.profiles.workflow-app]
+base = "generic-python"
+fallback_subsystem = "other"
+
+[[tool.cremona.profiles.workflow-app.signals]]
+name = "kwargs_bridge_hits"
+kind = "regex_count"
+pattern = "\\blegacy_[A-Za-z0-9_]*\\b"
+points_per = 10
+max_points = 6
+
+[[tool.cremona.profiles.workflow-app.routing_bonuses]]
+name = "migration_pressure"
+points = 4
+all = [
+  { source = "signal", name = "kwargs_bridge_hits", op = ">=", value = 25 },
+  { source = "component", name = "coupling_score", op = ">=", value = 10 },
+]
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    config = audit.load_audit_config(repo_root=tmp_path)
+    profile = audit.get_profile("workflow-app", config.profile_registry)
+
+    with _use_profile(profile):
+        queue = audit.build_agent_routing_queue(
+            scope_files=["pkg/translation.py", "pkg/example.py"],
+            hotspots=[],
+            dead_code_candidates=[],
+            history_summary={
+                "status": "available",
+                "max_commit_frequency": 20,
+                "max_churn": 1000,
+                "files": {
+                    "pkg/translation.py": {
+                        "commit_frequency": 18,
+                        "churn": 600,
+                        "top_coupled_files": [
+                            {"file": "pkg/cli/app.py", "shared_commits": 7, "in_scope": False},
+                            {"file": "pkg/cli/translate.py", "shared_commits": 7, "in_scope": False},
+                            {"file": "pkg/materialize.py", "shared_commits": 7, "in_scope": False},
+                            {"file": "pkg/trends.py", "shared_commits": 7, "in_scope": False},
+                            {
+                                "file": "pkg/pipeline/trends_stage.py",
+                                "shared_commits": 6,
+                                "in_scope": False,
+                            },
+                        ],
+                    },
+                    "pkg/example.py": {
+                        "commit_frequency": 1,
+                        "churn": 10,
+                        "top_coupled_files": [],
+                    },
+                },
+            },
+            coverage_summary={
+                "status": "unavailable",
+                "files": {
+                    "pkg/translation.py": {"mode": "unknown", "fraction": None},
+                    "pkg/example.py": {"mode": "unknown", "fraction": None},
+                },
+            },
+            routing_index={
+                "pkg/translation.py": {
+                    "module_package_shadow": 0,
+                    "wildcard_reexport": 0,
+                    "facade_reexport": 0,
+                    "kwargs_bridge_hits": 80,
+                },
+                "pkg/example.py": {
+                    "module_package_shadow": 0,
+                    "wildcard_reexport": 0,
+                    "facade_reexport": 0,
+                    "kwargs_bridge_hits": 0,
+                },
+            },
+        )
+
+    assert queue[0]["file"] == "pkg/translation.py"
     assert queue[0]["priority_band"] == "investigate_soon"
-    assert queue[0]["priority_components"]["compatibility_pressure_score"] > 0
+    assert queue[0]["priority_components"]["routing_bonus_score"] > 0
+    assert queue[0]["routing_rules_triggered"] == ["migration_pressure"]
 
 
 def test_build_repo_verdict_reports_routing_pressure_separately_from_debt_status() -> None:
@@ -870,8 +1284,8 @@ def test_build_repo_verdict_marks_sparse_coverage_as_partial_signal_health() -> 
 def test_build_baseline_diff_marks_new_hotspots() -> None:
     current_hotspots = [
         {
-            "id": "recoleta/example.py::branchy",
-            "file": "recoleta/example.py",
+            "id": "pkg/example.py::branchy",
+            "file": "pkg/example.py",
             "symbol": "branchy",
             "classification": "refactor_soon",
             "tools": ["ruff"],
@@ -882,8 +1296,12 @@ def test_build_baseline_diff_marks_new_hotspots() -> None:
     diff = audit.build_baseline_diff(
         current_hotspots=current_hotspots,
         current_dead_code_candidates=[],
-        baseline_report={"hotspots": [], "dead_code_candidates": []},
-        scope_files=["recoleta/example.py"],
+        baseline_report={
+            "schema_version": 3,
+            "hotspots": [],
+            "dead_code_candidates": [],
+        },
+        scope_files=["pkg/example.py"],
         config=CONFIG,
     )
 
@@ -893,10 +1311,11 @@ def test_build_baseline_diff_marks_new_hotspots() -> None:
 
 def test_build_baseline_diff_marks_worsened_hotspots() -> None:
     baseline_report = {
+        "schema_version": 3,
         "hotspots": [
             {
-                "id": "recoleta/example.py::branchy",
-                "file": "recoleta/example.py",
+                "id": "pkg/example.py::branchy",
+                "file": "pkg/example.py",
                 "symbol": "branchy",
                 "classification": "monitor",
                 "tools": ["ruff"],
@@ -907,8 +1326,8 @@ def test_build_baseline_diff_marks_worsened_hotspots() -> None:
     }
     current_hotspots = [
         {
-            "id": "recoleta/example.py::branchy",
-            "file": "recoleta/example.py",
+            "id": "pkg/example.py::branchy",
+            "file": "pkg/example.py",
             "symbol": "branchy",
             "classification": "refactor_soon",
             "tools": ["ruff", "lizard"],
@@ -923,7 +1342,7 @@ def test_build_baseline_diff_marks_worsened_hotspots() -> None:
         current_hotspots=current_hotspots,
         current_dead_code_candidates=[],
         baseline_report=baseline_report,
-        scope_files=["recoleta/example.py"],
+        scope_files=["pkg/example.py"],
         config=CONFIG,
     )
 
@@ -933,10 +1352,11 @@ def test_build_baseline_diff_marks_worsened_hotspots() -> None:
 
 def test_build_baseline_diff_ignores_same_band_lizard_nloc_growth() -> None:
     baseline_report = {
+        "schema_version": 3,
         "hotspots": [
             {
-                "id": "recoleta/example.py::branchy",
-                "file": "recoleta/example.py",
+                "id": "pkg/example.py::branchy",
+                "file": "pkg/example.py",
                 "symbol": "branchy",
                 "classification": "monitor",
                 "tools": ["lizard"],
@@ -947,8 +1367,8 @@ def test_build_baseline_diff_ignores_same_band_lizard_nloc_growth() -> None:
     }
     current_hotspots = [
         {
-            "id": "recoleta/example.py::branchy",
-            "file": "recoleta/example.py",
+            "id": "pkg/example.py::branchy",
+            "file": "pkg/example.py",
             "symbol": "branchy",
             "classification": "monitor",
             "tools": ["lizard"],
@@ -960,7 +1380,7 @@ def test_build_baseline_diff_ignores_same_band_lizard_nloc_growth() -> None:
         current_hotspots=current_hotspots,
         current_dead_code_candidates=[],
         baseline_report=baseline_report,
-        scope_files=["recoleta/example.py"],
+        scope_files=["pkg/example.py"],
         config=CONFIG,
     )
 
@@ -971,8 +1391,8 @@ def test_build_baseline_diff_ignores_same_band_lizard_nloc_growth() -> None:
 def test_build_baseline_diff_ignores_new_monitor_lizard_nloc_hotspot() -> None:
     current_hotspots = [
         {
-            "id": "recoleta/example.py::wrapped",
-            "file": "recoleta/example.py",
+            "id": "pkg/example.py::wrapped",
+            "file": "pkg/example.py",
             "symbol": "wrapped",
             "classification": "monitor",
             "tools": ["lizard"],
@@ -983,8 +1403,12 @@ def test_build_baseline_diff_ignores_new_monitor_lizard_nloc_hotspot() -> None:
     diff = audit.build_baseline_diff(
         current_hotspots=current_hotspots,
         current_dead_code_candidates=[],
-        baseline_report={"hotspots": [], "dead_code_candidates": []},
-        scope_files=["recoleta/example.py"],
+        baseline_report={
+            "schema_version": 3,
+            "hotspots": [],
+            "dead_code_candidates": [],
+        },
+        scope_files=["pkg/example.py"],
         config=CONFIG,
     )
 
@@ -994,10 +1418,11 @@ def test_build_baseline_diff_ignores_new_monitor_lizard_nloc_hotspot() -> None:
 
 def test_build_baseline_diff_marks_resolved_hotspots() -> None:
     baseline_report = {
+        "schema_version": 3,
         "hotspots": [
             {
-                "id": "recoleta/example.py::branchy",
-                "file": "recoleta/example.py",
+                "id": "pkg/example.py::branchy",
+                "file": "pkg/example.py",
                 "symbol": "branchy",
                 "classification": "refactor_soon",
                 "tools": ["ruff"],
@@ -1011,7 +1436,7 @@ def test_build_baseline_diff_marks_resolved_hotspots() -> None:
         current_hotspots=[],
         current_dead_code_candidates=[],
         baseline_report=baseline_report,
-        scope_files=["recoleta/example.py"],
+        scope_files=["pkg/example.py"],
         config=CONFIG,
     )
 
@@ -1062,7 +1487,7 @@ def test_render_markdown_report_contains_required_sections() -> None:
             {
                 "classification": "refactor_soon",
                 "tool_count": 2,
-                "file": "recoleta/example.py",
+                "file": "pkg/example.py",
                 "symbol": "branchy",
                 "tools": ["lizard", "ruff"],
                 "metrics": {
@@ -1075,14 +1500,14 @@ def test_render_markdown_report_contains_required_sections() -> None:
             {
                 "classification": "high_confidence_candidate",
                 "confidence": 90,
-                "file": "recoleta/example.py",
+                "file": "pkg/example.py",
                 "symbol": "unused_helper",
                 "kind": "function",
             }
         ],
         "agent_routing_queue": [
             {
-                "file": "recoleta/example.py",
+                "file": "pkg/example.py",
                 "priority_band": "investigate_soon",
                 "priority_score": 40,
                 "change_frequency": 4,
@@ -1156,8 +1581,8 @@ def test_build_baseline_snapshot_resets_diff_and_repo_verdict() -> None:
         },
         "hotspots": [
             {
-                "id": "recoleta/example.py::branchy",
-                "file": "recoleta/example.py",
+                "id": "pkg/example.py::branchy",
+                "file": "pkg/example.py",
                 "symbol": "branchy",
                 "classification": "refactor_soon",
                 "tools": ["ruff"],
@@ -1183,8 +1608,8 @@ def test_build_baseline_snapshot_resets_diff_and_repo_verdict() -> None:
             "resolved": [],
         },
         "recommended_refactor_queue": [],
-        "scope": {"files": ["recoleta/example.py"]},
-        "schema_version": 2,
+        "scope": {"files": ["pkg/example.py"]},
+        "schema_version": 3,
         "generated_at": "2026-04-02T00:00:00+00:00",
     }
 
@@ -1200,14 +1625,15 @@ def test_build_baseline_snapshot_resets_diff_and_repo_verdict() -> None:
 
 def test_build_baseline_snapshot_merges_partial_scope_updates() -> None:
     baseline_report = {
+        "schema_version": 3,
         "scope": {
-            "files": ["recoleta/in_scope.py", "recoleta/out_of_scope.py"],
+            "files": ["pkg/in_scope.py", "pkg/out_of_scope.py"],
             "file_count": 2,
         },
         "hotspots": [
             {
-                "id": "recoleta/in_scope.py::branchy",
-                "file": "recoleta/in_scope.py",
+                "id": "pkg/in_scope.py::branchy",
+                "file": "pkg/in_scope.py",
                 "symbol": "branchy",
                 "classification": "monitor",
                 "subsystem": "other",
@@ -1225,8 +1651,8 @@ def test_build_baseline_snapshot_merges_partial_scope_updates() -> None:
                 ],
             },
             {
-                "id": "recoleta/out_of_scope.py::other_hotspot",
-                "file": "recoleta/out_of_scope.py",
+                "id": "pkg/out_of_scope.py::other_hotspot",
+                "file": "pkg/out_of_scope.py",
                 "symbol": "other_hotspot",
                 "classification": "refactor_now",
                 "subsystem": "other",
@@ -1246,8 +1672,8 @@ def test_build_baseline_snapshot_merges_partial_scope_updates() -> None:
         ],
         "dead_code_candidates": [
             {
-                "id": "recoleta/out_of_scope.py::function::unused_helper",
-                "file": "recoleta/out_of_scope.py",
+                "id": "pkg/out_of_scope.py::function::unused_helper",
+                "file": "pkg/out_of_scope.py",
                 "line": 30,
                 "symbol": "unused_helper",
                 "kind": "function",
@@ -1259,7 +1685,7 @@ def test_build_baseline_snapshot_merges_partial_scope_updates() -> None:
         ],
         "agent_routing_queue": [
             {
-                "file": "recoleta/out_of_scope.py",
+                "file": "pkg/out_of_scope.py",
                 "subsystem": "other",
                 "priority_score": 80,
                 "priority_band": "investigate_now",
@@ -1273,20 +1699,20 @@ def test_build_baseline_snapshot_merges_partial_scope_updates() -> None:
                     "multi_tool_monitor": 0,
                     "top_symbols": [],
                 },
-                "ambiguity_signals": {
+                "routing_signals": {
                     "module_package_shadow": 0,
                     "wildcard_reexport": 0,
                     "facade_reexport": 0,
-                    "legacy_keyword_hits": 0,
-                    "compat_request_wrapper": 0,
                 },
+                "routing_rules_triggered": [],
                 "dead_code_candidate_count": 1,
                 "coverage": {"mode": "unknown", "fraction": None},
                 "priority_components": {
                     "change_score": 10,
                     "coupling_score": 0,
                     "static_score": 5,
-                    "ambiguity_score": 0,
+                    "routing_signal_score": 0,
+                    "routing_bonus_score": 0,
                     "dead_code_score": 3,
                     "coverage_risk_score": 0,
                 },
@@ -1298,7 +1724,7 @@ def test_build_baseline_snapshot_merges_partial_scope_updates() -> None:
             "max_commit_frequency": 8,
             "max_churn": 100,
             "files": {
-                "recoleta/out_of_scope.py": {
+                "pkg/out_of_scope.py": {
                     "commit_frequency": 8,
                     "churn": 100,
                     "top_coupled_files": [],
@@ -1334,8 +1760,8 @@ def test_build_baseline_snapshot_merges_partial_scope_updates() -> None:
         },
         "hotspots": [
             {
-                "id": "recoleta/in_scope.py::branchy",
-                "file": "recoleta/in_scope.py",
+                "id": "pkg/in_scope.py::branchy",
+                "file": "pkg/in_scope.py",
                 "symbol": "branchy",
                 "classification": "refactor_soon",
                 "subsystem": "other",
@@ -1379,7 +1805,7 @@ def test_build_baseline_snapshot_merges_partial_scope_updates() -> None:
         },
         "agent_routing_queue": [
             {
-                "file": "recoleta/in_scope.py",
+                "file": "pkg/in_scope.py",
                 "subsystem": "other",
                 "priority_score": 50,
                 "priority_band": "investigate_soon",
@@ -1393,20 +1819,20 @@ def test_build_baseline_snapshot_merges_partial_scope_updates() -> None:
                     "multi_tool_monitor": 0,
                     "top_symbols": [],
                 },
-                "ambiguity_signals": {
+                "routing_signals": {
                     "module_package_shadow": 0,
                     "wildcard_reexport": 0,
                     "facade_reexport": 0,
-                    "legacy_keyword_hits": 0,
-                    "compat_request_wrapper": 0,
                 },
+                "routing_rules_triggered": [],
                 "dead_code_candidate_count": 0,
                 "coverage": {"mode": "line", "fraction": 0.5},
                 "priority_components": {
                     "change_score": 10,
                     "coupling_score": 0,
                     "static_score": 3,
-                    "ambiguity_score": 0,
+                    "routing_signal_score": 0,
+                    "routing_bonus_score": 0,
                     "dead_code_score": 0,
                     "coverage_risk_score": 5,
                 },
@@ -1418,7 +1844,7 @@ def test_build_baseline_snapshot_merges_partial_scope_updates() -> None:
             "max_commit_frequency": 5,
             "max_churn": 40,
             "files": {
-                "recoleta/in_scope.py": {
+                "pkg/in_scope.py": {
                     "commit_frequency": 5,
                     "churn": 40,
                     "top_coupled_files": [],
@@ -1426,38 +1852,39 @@ def test_build_baseline_snapshot_merges_partial_scope_updates() -> None:
             },
         },
         "recommended_refactor_queue": [],
-        "scope": {"files": ["recoleta/in_scope.py"], "file_count": 1},
-        "schema_version": 2,
+        "scope": {"files": ["pkg/in_scope.py"], "file_count": 1},
+        "schema_version": 3,
         "generated_at": "2026-04-02T00:00:00+00:00",
     }
 
     snapshot = audit.build_baseline_snapshot(
         report,
         baseline_report=baseline_report,
-        scope_files=["recoleta/in_scope.py"],
+        scope_files=["pkg/in_scope.py"],
     )
 
     assert [item["id"] for item in snapshot["hotspots"]] == [
-        "recoleta/out_of_scope.py::other_hotspot",
-        "recoleta/in_scope.py::branchy",
+        "pkg/out_of_scope.py::other_hotspot",
+        "pkg/in_scope.py::branchy",
     ]
     assert snapshot["summary"]["files_scanned"] == 2
     assert snapshot["summary"]["hotspots_total"] == 2
     assert snapshot["tool_summaries"]["ruff"]["critical"] == 1
     assert snapshot["tool_summaries"]["complexipy"]["critical"] == 1
-    assert snapshot["dead_code_candidates"][0]["file"] == "recoleta/out_of_scope.py"
+    assert snapshot["dead_code_candidates"][0]["file"] == "pkg/out_of_scope.py"
     assert [item["file"] for item in snapshot["agent_routing_queue"]] == [
-        "recoleta/out_of_scope.py",
-        "recoleta/in_scope.py",
+        "pkg/out_of_scope.py",
+        "pkg/in_scope.py",
     ]
-    assert snapshot["history_summary"]["files"]["recoleta/out_of_scope.py"]["churn"] == 100
+    assert snapshot["history_summary"]["files"]["pkg/out_of_scope.py"]["churn"] == 100
     assert snapshot["baseline_diff"]["has_regressions"] is False
 
 
-def test_build_baseline_snapshot_accepts_v1_baseline_without_routing_fields() -> None:
+def test_build_baseline_snapshot_rejects_legacy_baseline_schema() -> None:
     baseline_report = {
+        "schema_version": 2,
         "scope": {
-            "files": ["recoleta/in_scope.py", "recoleta/out_of_scope.py"],
+            "files": ["pkg/in_scope.py", "pkg/out_of_scope.py"],
             "file_count": 2,
         },
         "hotspots": [],
@@ -1506,7 +1933,7 @@ def test_build_baseline_snapshot_accepts_v1_baseline_without_routing_fields() ->
         },
         "agent_routing_queue": [
             {
-                "file": "recoleta/in_scope.py",
+                "file": "pkg/in_scope.py",
                 "subsystem": "other",
                 "priority_score": 20,
                 "priority_band": "watch",
@@ -1520,20 +1947,20 @@ def test_build_baseline_snapshot_accepts_v1_baseline_without_routing_fields() ->
                     "multi_tool_monitor": 0,
                     "top_symbols": [],
                 },
-                "ambiguity_signals": {
+                "routing_signals": {
                     "module_package_shadow": 0,
                     "wildcard_reexport": 0,
                     "facade_reexport": 0,
-                    "legacy_keyword_hits": 0,
-                    "compat_request_wrapper": 0,
                 },
+                "routing_rules_triggered": [],
                 "dead_code_candidate_count": 0,
                 "coverage": {"mode": "unknown", "fraction": None},
                 "priority_components": {
                     "change_score": 2,
                     "coupling_score": 0,
                     "static_score": 0,
-                    "ambiguity_score": 0,
+                    "routing_signal_score": 0,
+                    "routing_bonus_score": 0,
                     "dead_code_score": 0,
                     "coverage_risk_score": 0,
                 },
@@ -1545,7 +1972,7 @@ def test_build_baseline_snapshot_accepts_v1_baseline_without_routing_fields() ->
             "max_commit_frequency": 1,
             "max_churn": 2,
             "files": {
-                "recoleta/in_scope.py": {
+                "pkg/in_scope.py": {
                     "commit_frequency": 1,
                     "churn": 2,
                     "top_coupled_files": [],
@@ -1561,20 +1988,24 @@ def test_build_baseline_snapshot_accepts_v1_baseline_without_routing_fields() ->
             "resolved": [],
         },
         "recommended_refactor_queue": [],
-        "scope": {"files": ["recoleta/in_scope.py"], "file_count": 1},
-        "schema_version": 2,
+        "scope": {"files": ["pkg/in_scope.py"], "file_count": 1},
+        "schema_version": 3,
         "generated_at": "2026-04-02T00:00:00+00:00",
     }
 
-    snapshot = audit.build_baseline_snapshot(
-        report,
-        baseline_report=baseline_report,
-        scope_files=["recoleta/in_scope.py"],
-    )
+    try:
+        audit.build_baseline_snapshot(
+            report,
+            baseline_report=baseline_report,
+            scope_files=["pkg/in_scope.py"],
+        )
+    except RuntimeError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("Expected legacy baseline schema to be rejected")
 
-    assert snapshot["agent_routing_queue"][0]["file"] == "recoleta/in_scope.py"
-    assert snapshot["history_summary"]["files"]["recoleta/in_scope.py"]["commit_frequency"] == 1
-    assert snapshot["summary"]["agent_routing_queue_total"] == 1
+    assert "schema version" in message
+    assert "Regenerate the baseline" in message
 
 
 def test_refactor_audit_cli_generates_schema_stable_outputs(tmp_path: Path) -> None:
@@ -1656,7 +2087,7 @@ def unused_helper() -> str:
     assert (out_dir / "raw" / "vulture.txt").exists()
 
     payload = json.loads(report_json.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
     assert payload["scope"]["file_count"] == 2
     assert set(payload) >= {
         "schema_version",
@@ -1675,6 +2106,256 @@ def unused_helper() -> str:
     }
     assert payload["hotspots"]
     assert payload["dead_code_candidates"]
+
+
+def test_refactor_audit_cli_bootstraps_baseline_from_repo_config(tmp_path: Path) -> None:
+    fixture_root = tmp_path / "fixture_project"
+    fixture_root.mkdir()
+    source_dir = fixture_root / "src"
+    source_dir.mkdir()
+    tests_dir = fixture_root / "tests"
+    tests_dir.mkdir()
+    (source_dir / "hotspot.py").write_text(
+        """
+from __future__ import annotations
+
+
+def branchy(a: bool, b: bool, c: bool, d: bool, e: bool, f: bool) -> int:
+    total = 0
+    if a:
+        total += 1
+    if b:
+        total += 1
+    if c:
+        total += 1
+    if d:
+        total += 1
+    if e:
+        total += 1
+    if f:
+        total += 1
+    if a and b:
+        total += 1
+    if c and d:
+        total += 1
+    if e and f:
+        total += 1
+    if a or c:
+        total += 1
+    if b or d:
+        total += 1
+    if e or a:
+        total += 1
+    return total
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (tests_dir / "test_placeholder.py").write_text(
+        """
+def test_placeholder() -> None:
+    assert True
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (fixture_root / "pyproject.toml").write_text(
+        """
+[tool.cremona]
+targets = ["src", "tests"]
+out_dir = "output/refactor-audit"
+baseline = "quality/refactor-baseline.json"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "cremona.cli",
+            "scan",
+            "--update-baseline",
+        ],
+        cwd=fixture_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+
+    report_json = fixture_root / "output" / "refactor-audit" / "report.json"
+    baseline_path = fixture_root / "quality" / "refactor-baseline.json"
+    assert report_json.exists()
+    assert baseline_path.exists()
+
+    report = json.loads(report_json.read_text(encoding="utf-8"))
+    assert report["scope"]["requested_targets"] == ["src", "tests"]
+    assert report["scope"]["file_count"] == 2
+
+    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    assert baseline["scope"]["requested_targets"] == ["src", "tests"]
+    assert baseline["scope"]["file_count"] == 2
+    assert baseline["baseline_diff"]["baseline_available"] is False
+    assert baseline["baseline_diff"]["has_regressions"] is False
+
+
+def test_refactor_audit_cli_rejects_legacy_baseline_schema(tmp_path: Path) -> None:
+    fixture_root = tmp_path / "fixture_project"
+    fixture_root.mkdir()
+    source_dir = fixture_root / "src"
+    source_dir.mkdir()
+    (source_dir / "hotspot.py").write_text(
+        """
+from __future__ import annotations
+
+
+def branchy(a: bool, b: bool, c: bool, d: bool, e: bool, f: bool) -> int:
+    total = 0
+    if a:
+        total += 1
+    if b:
+        total += 1
+    if c:
+        total += 1
+    if d:
+        total += 1
+    if e:
+        total += 1
+    if f:
+        total += 1
+    if a and b:
+        total += 1
+    if c and d:
+        total += 1
+    if e and f:
+        total += 1
+    if a or c:
+        total += 1
+    if b or d:
+        total += 1
+    if e or a:
+        total += 1
+    return total
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (fixture_root / "pyproject.toml").write_text(
+        """
+[tool.cremona]
+targets = ["src"]
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    baseline_path = fixture_root / "quality" / "refactor-baseline.json"
+    baseline_path.parent.mkdir(parents=True, exist_ok=True)
+    baseline_path.write_text(
+        json.dumps({"schema_version": 2, "hotspots": [], "dead_code_candidates": []}),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "cremona.cli",
+            "scan",
+            "--baseline",
+            str(baseline_path),
+        ],
+        cwd=fixture_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "Regenerate the baseline" in result.stderr
+    assert "schema version" in result.stderr
+
+
+def test_refactor_audit_cli_update_baseline_replaces_legacy_baseline_schema(
+    tmp_path: Path,
+) -> None:
+    fixture_root = tmp_path / "fixture_project"
+    fixture_root.mkdir()
+    source_dir = fixture_root / "src"
+    source_dir.mkdir()
+    (source_dir / "hotspot.py").write_text(
+        """
+from __future__ import annotations
+
+
+def branchy(a: bool, b: bool, c: bool, d: bool, e: bool, f: bool) -> int:
+    total = 0
+    if a:
+        total += 1
+    if b:
+        total += 1
+    if c:
+        total += 1
+    if d:
+        total += 1
+    if e:
+        total += 1
+    if f:
+        total += 1
+    if a and b:
+        total += 1
+    if c and d:
+        total += 1
+    if e and f:
+        total += 1
+    if a or c:
+        total += 1
+    if b or d:
+        total += 1
+    if e or a:
+        total += 1
+    return total
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (fixture_root / "pyproject.toml").write_text(
+        """
+[tool.cremona]
+targets = ["src"]
+baseline = "quality/refactor-baseline.json"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    baseline_path = fixture_root / "quality" / "refactor-baseline.json"
+    baseline_path.parent.mkdir(parents=True, exist_ok=True)
+    baseline_path.write_text(
+        json.dumps({"schema_version": 2, "hotspots": [], "dead_code_candidates": []}),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "cremona.cli",
+            "scan",
+            "--update-baseline",
+        ],
+        cwd=fixture_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+
+    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    assert baseline["schema_version"] == 3
+    assert baseline["baseline_diff"]["baseline_available"] is False
 
 
 def test_refactor_audit_cli_rejects_partial_baseline_init(tmp_path: Path) -> None:

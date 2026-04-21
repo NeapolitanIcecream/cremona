@@ -17,4 +17,6 @@ jobs:
       - run: uv sync --group dev
       - run: uv run ruff check .
       - run: uv run pyright
-      - run: uv run pytest
+      - run: uv run coverage run -m pytest -q
+      - run: uv run coverage json -o coverage.json
+      - run: uv run cremona scan --baseline quality/refactor-baseline.json --coverage-json coverage.json --fail-on-regression

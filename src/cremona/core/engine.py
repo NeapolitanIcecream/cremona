@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterable, Literal
 
-from ..profiles import DEFAULT_PROFILE, Profile, empty_ambiguity_signals, get_profile
+from ..profiles import DEFAULT_PROFILE, Profile, empty_routing_signals, get_profile
 from ..python_tools.engine import (
     ScopeLookup,
     collect_python_files,
@@ -493,16 +493,16 @@ def _is_facade_import(node: ast.AST) -> bool:
     return False
 
 
-def build_agent_ambiguity_index(
+def build_agent_routing_index(
     *,
     repo_root: Path,
     files: list[Path],
 ) -> dict[str, dict[str, int]]:
-    return _ACTIVE_PROFILE.build_ambiguity_index(repo_root, files)
+    return _ACTIVE_PROFILE.build_routing_index(repo_root, files)
 
 
-def _empty_ambiguity_signals() -> dict[str, int]:
-    return empty_ambiguity_signals()
+def _empty_routing_signals() -> dict[str, int]:
+    return empty_routing_signals(_ACTIVE_PROFILE)
 
 
 def _summarize_file_hotspots(file_hotspots: list[dict[str, Any]]) -> dict[str, Any]:
@@ -631,36 +631,6 @@ def _static_score(hotspot_summary: dict[str, Any]) -> int:
     )
 
 
-def _ambiguity_score(ambiguity_signals: dict[str, int]) -> tuple[int, int]:
-    legacy_keyword_hits = int(ambiguity_signals["legacy_keyword_hits"])
-    ambiguity_score = min(
-        20,
-        5 * int(ambiguity_signals["module_package_shadow"])
-        + 4 * int(ambiguity_signals["wildcard_reexport"])
-        + 3 * int(ambiguity_signals["facade_reexport"])
-        + min(6, legacy_keyword_hits // 10)
-        + 2 * int(ambiguity_signals["compat_request_wrapper"]),
-    )
-    return (ambiguity_score, legacy_keyword_hits)
-
-
-def _compatibility_pressure_score(
-    *,
-    legacy_keyword_hits: int,
-    ambiguity_signals: dict[str, int],
-    coupling_score: int,
-    change_score: int,
-) -> int:
-    score = 0
-    if legacy_keyword_hits >= 25 and int(ambiguity_signals["compat_request_wrapper"]) > 0:
-        score += 4
-    if legacy_keyword_hits >= 50 and coupling_score >= 10:
-        score += 3
-    if legacy_keyword_hits >= 100 and change_score >= 8:
-        score += 2
-    return score
-
-
 def _dead_code_score(
     *,
     high_confidence_dead_code: int,
@@ -681,7 +651,7 @@ def _coverage_risk_score(coverage_entry: dict[str, Any]) -> int:
 
 def _routing_priority_components(
     context: RoutingFileContext,
-) -> dict[str, int]:
+) -> tuple[dict[str, int], list[str]]:
     commit_frequency = int(context.history_entry.get("commit_frequency", 0))
     churn = int(context.history_entry.get("churn", 0))
     top_coupled_files = list(context.history_entry.get("top_coupled_files", []))
@@ -693,32 +663,33 @@ def _routing_priority_components(
         max_churn=context.max_churn,
     )
     coupling_score = _coupling_score(top_coupled_files)
-    ambiguity_score, legacy_keyword_hits = _ambiguity_score(context.ambiguity_signals)
     high_confidence_dead_code, review_candidate_dead_code = _count_dead_code_candidates(
         context.file_dead_code
     )
-    return {
+    components = {
         "change_score": change_score,
         "coupling_score": coupling_score,
         "static_score": _static_score(hotspot_summary),
-        "ambiguity_score": ambiguity_score,
-        "compatibility_pressure_score": _compatibility_pressure_score(
-            legacy_keyword_hits=legacy_keyword_hits,
-            ambiguity_signals=context.ambiguity_signals,
-            coupling_score=coupling_score,
-            change_score=change_score,
-        ),
         "dead_code_score": _dead_code_score(
             high_confidence_dead_code=high_confidence_dead_code,
             review_candidate_dead_code=review_candidate_dead_code,
         ),
         "coverage_risk_score": _coverage_risk_score(context.coverage_entry),
     }
+    components["routing_signal_score"] = _ACTIVE_PROFILE.routing_signal_score(
+        context.routing_signals
+    )
+    routing_bonus_score, triggered = _ACTIVE_PROFILE.evaluate_routing_bonus_rules(
+        routing_signals=context.routing_signals,
+        components=components,
+    )
+    components["routing_bonus_score"] = routing_bonus_score
+    return (components, triggered)
 
 
 def _build_agent_routing_item(context: RoutingFileContext) -> dict[str, Any]:
     hotspot_summary = _summarize_file_hotspots(context.file_hotspots)
-    priority_components = _routing_priority_components(context)
+    priority_components, routing_rules_triggered = _routing_priority_components(context)
     priority_score = min(100, sum(priority_components.values()))
     return {
         "file": context.file_name,
@@ -729,7 +700,8 @@ def _build_agent_routing_item(context: RoutingFileContext) -> dict[str, Any]:
         "churn": int(context.history_entry.get("churn", 0)),
         "top_coupled_files": list(context.history_entry.get("top_coupled_files", [])),
         "hotspot_summary": hotspot_summary,
-        "ambiguity_signals": context.ambiguity_signals,
+        "routing_signals": context.routing_signals,
+        "routing_rules_triggered": routing_rules_triggered,
         "dead_code_candidate_count": len(context.file_dead_code),
         "coverage": dict(context.coverage_entry),
         "priority_components": priority_components,
@@ -743,7 +715,7 @@ def build_agent_routing_queue(
     dead_code_candidates: list[dict[str, Any]],
     history_summary: dict[str, Any],
     coverage_summary: dict[str, Any],
-    ambiguity_index: dict[str, dict[str, int]],
+    routing_index: dict[str, dict[str, int]],
 ) -> list[dict[str, Any]]:
     hotspots_by_file: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for hotspot in hotspots:
@@ -762,8 +734,8 @@ def build_agent_routing_queue(
         coverage_entry = coverage_summary.get("files", {}).get(
             file_name, _unknown_coverage_summary()
         )
-        ambiguity_signals = dict(
-            ambiguity_index.get(file_name, _empty_ambiguity_signals())
+        routing_signals = dict(
+            routing_index.get(file_name, _empty_routing_signals())
         )
         file_dead_code = dead_code_by_file.get(file_name, [])
         queue.append(
@@ -772,7 +744,7 @@ def build_agent_routing_queue(
                     file_name=file_name,
                     history_entry=history_entry,
                     coverage_entry=coverage_entry,
-                    ambiguity_signals=ambiguity_signals,
+                    routing_signals=routing_signals,
                     file_hotspots=hotspots_by_file.get(file_name, []),
                     file_dead_code=file_dead_code,
                     max_commit_frequency=max_commit_frequency,
@@ -875,6 +847,7 @@ def build_baseline_diff(
     scoped_files = set(scope_files)
     if baseline_report is None:
         return _empty_baseline_diff()
+    _require_supported_baseline_report(baseline_report)
 
     baseline_hotspots = _baseline_items_by_id(
         baseline_report=baseline_report,
@@ -1500,6 +1473,8 @@ def build_baseline_snapshot(
 ) -> dict[str, Any]:
     snapshot = dict(report)
     scoped_file_set = set(scope_files or [])
+    if baseline_report is not None:
+        _require_supported_baseline_report(baseline_report)
     if baseline_report is not None and scoped_file_set:
         snapshot["hotspots"] = sorted(
             [
@@ -1632,7 +1607,11 @@ def _prepare_audit_scope(request: RefactorAuditRunRequest) -> AuditScopeState:
     )
     if not files:
         raise RuntimeError("No Python files matched the requested scope.")
-    lookup = ScopeLookup.from_files(repo_root=request.config.repo_root, files=files)
+    lookup = ScopeLookup.from_files(
+        repo_root=request.config.repo_root,
+        files=files,
+        ignored_decorators=_ACTIVE_PROFILE.dead_code_ignored_decorators,
+    )
     request.out_dir.mkdir(parents=True, exist_ok=True)
     raw_dir = request.out_dir / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
@@ -1820,10 +1799,30 @@ def _run_audit_tools(
     )
 
 
-def _load_baseline_report(baseline_path: Path) -> dict[str, Any] | None:
+def _require_supported_baseline_report(baseline_report: dict[str, Any]) -> None:
+    schema_version = optional_int(baseline_report.get("schema_version"))
+    if schema_version is None or schema_version < SCHEMA_VERSION:
+        raise RuntimeError(
+            f"Baseline schema version {schema_version!r} is no longer supported. "
+            f"Regenerate the baseline with Cremona schema version {SCHEMA_VERSION}."
+        )
+
+
+def _baseline_report_is_supported(baseline_report: dict[str, Any]) -> bool:
+    schema_version = optional_int(baseline_report.get("schema_version"))
+    return schema_version is not None and schema_version >= SCHEMA_VERSION
+
+
+def _load_baseline_report(
+    baseline_path: Path,
+    *,
+    require_supported_schema: bool = True,
+) -> dict[str, Any] | None:
     if not baseline_path.exists():
         return None
     baseline_report = json.loads(baseline_path.read_text(encoding="utf-8"))
+    if require_supported_schema:
+        _require_supported_baseline_report(baseline_report)
     baseline_report["_baseline_path"] = str(baseline_path)
     return baseline_report
 
@@ -1898,7 +1897,12 @@ def run_refactor_audit(
         request=request,
         legacy_kwargs=legacy_kwargs,
     )
-    previous_profile = _set_active_profile(get_profile(resolved_request.config.profile))
+    previous_profile = _set_active_profile(
+        get_profile(
+            resolved_request.config.profile,
+            resolved_request.config.profile_registry,
+        )
+    )
     try:
         scope_state = _prepare_audit_scope(resolved_request)
         tool_run = _run_audit_tools(scope_state, resolved_request)
@@ -1930,7 +1934,7 @@ def run_refactor_audit(
             repo_root=resolved_request.config.repo_root,
             tracked_files=scope_state.current_scope_files,
         )
-        ambiguity_index = build_agent_ambiguity_index(
+        routing_index = build_agent_routing_index(
             repo_root=resolved_request.config.repo_root,
             files=scope_state.files,
         )
@@ -1940,9 +1944,18 @@ def run_refactor_audit(
             dead_code_candidates=tool_run.dead_code_candidates,
             history_summary=history_summary,
             coverage_summary=coverage_summary,
-            ambiguity_index=ambiguity_index,
+            routing_index=routing_index,
         )
-        baseline_report = _load_baseline_report(resolved_request.baseline_path)
+        baseline_report = _load_baseline_report(
+            resolved_request.baseline_path,
+            require_supported_schema=not (
+                resolved_request.update_baseline and not scope_state.is_partial_scope
+            ),
+        )
+        if baseline_report is not None and not _baseline_report_is_supported(
+            baseline_report
+        ):
+            baseline_report = None
         baseline_diff = build_baseline_diff(
             current_hotspots=hotspots,
             current_dead_code_candidates=tool_run.dead_code_candidates,
@@ -2003,9 +2016,11 @@ def run_scan(request: ScanRequest) -> ScanReport:
     config = request.config or load_audit_config(repo_root=repo_root)
     profile = request.profile or config.profile
     profile_name = profile.name if isinstance(profile, Profile) else str(profile)
+    get_profile(profile_name, config.profile_registry)
     resolved_config = AuditConfig(
         repo_root=config.repo_root,
         profile=profile_name,
+        profile_registry=config.profile_registry,
         targets=config.targets,
         exclude=config.exclude,
         out_dir=config.out_dir,
@@ -2076,7 +2091,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--profile",
-        help="Profile name. Defaults to tool.cremona.profile or generic-python.",
+        help=(
+            "Profile name. Defaults to tool.cremona.profile or generic-python. "
+            "Custom profiles live under tool.cremona.profiles."
+        ),
     )
     return parser
 
