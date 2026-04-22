@@ -210,6 +210,61 @@ jobs:
           name: ${{ inputs.artifact-name }}
           path: ${{ inputs.working-directory }}/${{ inputs.out-dir }}
           if-no-files-found: warn
+      - name: Resolve Cremona workflow source
+        id: cremona-workflow-source
+        if: ${{ always() && inputs.comment-on-pr && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+        shell: bash
+        env:
+          CREMONA_GITHUB_API_URL: ${{ github.api_url }}
+          CREMONA_GITHUB_REPOSITORY: ${{ github.repository }}
+          CREMONA_GITHUB_RUN_ID: ${{ github.run_id }}
+          CREMONA_GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import json
+          import os
+          import urllib.request
+
+          api_url = (
+              f"{os.environ['CREMONA_GITHUB_API_URL']}"
+              f"/repos/{os.environ['CREMONA_GITHUB_REPOSITORY']}"
+              f"/actions/runs/{os.environ['CREMONA_GITHUB_RUN_ID']}"
+          )
+          request = urllib.request.Request(
+              api_url,
+              headers={
+                  "Authorization": f"Bearer {os.environ['CREMONA_GITHUB_TOKEN']}",
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              },
+          )
+          with urllib.request.urlopen(request) as response:
+              payload = json.load(response)
+
+          referenced_workflows = payload.get("referenced_workflows", [])
+          if not referenced_workflows:
+              raise SystemExit("No referenced workflow metadata was found for this run.")
+
+          workflow_ref = referenced_workflows[0]
+          workflow_path = str(workflow_ref["path"])
+          repository = workflow_path.split("/.github/workflows/", 1)[0]
+          sha = str(workflow_ref["sha"])
+
+          output_path = Path(os.environ["GITHUB_OUTPUT"])
+          output_path.write_text(
+              f"repository={repository}\nsha={sha}\n",
+              encoding="utf-8",
+          )
+          PY
+      - name: Checkout Cremona workflow source
+        if: ${{ always() && inputs.comment-on-pr && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ steps.cremona-workflow-source.outputs.repository }}
+          ref: ${{ steps.cremona-workflow-source.outputs.sha }}
+          path: .cremona-workflow-source
+          fetch-depth: 1
       - name: Render Cremona PR comment
         if: ${{ always() && inputs.comment-on-pr && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
         shell: bash
@@ -220,6 +275,7 @@ jobs:
           CREMONA_MAX_HOTSPOTS: ${{ inputs.max-hotspots }}
           CREMONA_PR_COMMENT_PATH: ${{ runner.temp }}/cremona-pr-comment.md
           CREMONA_REPORT_JSON: ${{ inputs.out-dir }}/report.json
+          CREMONA_RENDERER_SOURCE: ${{ github.workspace }}/.cremona-workflow-source
           CREMONA_UPLOAD_ARTIFACT: ${{ inputs.upload-artifact }}
         run: |
           artifact_flag="--no-artifact-enabled"
@@ -227,7 +283,7 @@ jobs:
             artifact_flag="--artifact-enabled"
           fi
 
-          uv run --isolated --no-project --with cremona -m cremona.pr_comment \
+          uv run --isolated --no-project --with-editable "${CREMONA_RENDERER_SOURCE}" -m cremona.pr_comment \
             --report-json "${CREMONA_REPORT_JSON}" \
             --max-comment-rows "${CREMONA_MAX_COMMENT_ROWS}" \
             --max-hotspots "${CREMONA_MAX_HOTSPOTS}" \

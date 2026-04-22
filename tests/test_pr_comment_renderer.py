@@ -185,4 +185,6 @@ def test_reusable_gate_renders_pr_comment_without_loading_caller_project() -> No
 
     workflow_text = workflow_path.read_text(encoding="utf-8")
 
-    assert "uv run --isolated --no-project --with cremona -m cremona.pr_comment" in workflow_text
+    assert "referenced_workflows" in workflow_text
+    assert '--with-editable "${CREMONA_RENDERER_SOURCE}" -m cremona.pr_comment' in workflow_text
+    assert "uv run --isolated --no-project" in workflow_text
