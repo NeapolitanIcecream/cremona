@@ -21,7 +21,7 @@ When you adopt Cremona on a repository for the first time:
 1. Run `cremona scan --update-baseline` on the full configured scope.
 2. Commit `quality/refactor-baseline.json`.
 3. In CI, generate `coverage.json` from the test run and pass it to
-   `cremona scan --coverage-json coverage.json --fail-on-regression`.
+   `cremona scan --baseline quality/refactor-baseline.json --coverage-json coverage.json --fail-on-regression`.
 
 That keeps regressions gated against a committed baseline while preserving the
 coverage signal used in routing.
@@ -50,6 +50,8 @@ data instead of `unknown`.
   `investigate_soon` in the routing queue, even when churn and coupling are
   low.
 - `debt_status` is the regression verdict. `routing_pressure` is advisory.
+- `routing_pressure=watch_only` means the queue still has files to watch, but
+  no file currently requires immediate investigation.
 - `signal_health=partial` is a real downgrade. The queue is still useful, but
   missing history or coverage removes part of the scoring signal.
 

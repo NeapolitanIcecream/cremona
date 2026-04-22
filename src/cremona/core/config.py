@@ -1,17 +1,40 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 import tomllib
 from pathlib import Path
 from typing import Any
 
-from .models import AuditConfig, CoverageConfig, HistoryConfig, LizardBands, MetricBands, VultureBands
 from ..profiles import DEFAULT_PROFILE, build_profile_registry, get_profile
+from .models import (
+    AuditConfig,
+    CoverageConfig,
+    HistoryConfig,
+    LizardBands,
+    MetricBands,
+    VultureBands,
+)
 
 REPO_ROOT = Path.cwd()
 
+
 def load_audit_config(*, repo_root: Path = REPO_ROOT) -> AuditConfig:
-    pyproject_path = repo_root / "pyproject.toml"
-    defaults: dict[str, Any] = {
+    config_data = _merge_cremona_config(
+        defaults=_default_config_data(),
+        overrides=_load_repo_config(repo_root / "pyproject.toml"),
+    )
+    profile_registry = build_profile_registry(config_data)
+    profile_name = _validate_profile_name(config_data, profile_registry)
+    return _build_audit_config(
+        repo_root=repo_root,
+        config_data=config_data,
+        profile_name=profile_name,
+        profile_registry=profile_registry,
+    )
+
+
+def _default_config_data() -> dict[str, Any]:
+    return {
         "profile": DEFAULT_PROFILE.name,
         "targets": ["."],
         "exclude": [
@@ -68,21 +91,58 @@ def load_audit_config(*, repo_root: Path = REPO_ROOT) -> AuditConfig:
             "coverage_json": "",
         },
     }
-    config_data = dict(defaults)
-    if pyproject_path.exists():
-        data = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
-        loaded = data.get("tool", {}).get("cremona", {})
-        if isinstance(loaded, dict):
-            for key, value in loaded.items():
-                if isinstance(value, dict) and isinstance(config_data.get(key), dict):
-                    merged = dict(config_data[key])
-                    merged.update(value)
-                    config_data[key] = merged
-                else:
-                    config_data[key] = value
-    profile_registry = build_profile_registry(config_data)
+
+
+def _load_repo_config(pyproject_path: Path) -> dict[str, Any]:
+    if not pyproject_path.exists():
+        return {}
+    data = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+    loaded = data.get("tool", {}).get("cremona", {})
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _merge_cremona_config(
+    *,
+    defaults: Mapping[str, Any],
+    overrides: Mapping[str, Any],
+) -> dict[str, Any]:
+    config_data: dict[str, Any] = {
+        key: _clone_config_value(value) for key, value in defaults.items()
+    }
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(config_data.get(key), dict):
+            merged = dict(config_data[key])
+            merged.update(value)
+            config_data[key] = merged
+            continue
+        config_data[key] = value
+    return config_data
+
+
+def _clone_config_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _clone_config_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_clone_config_value(item) for item in value]
+    return value
+
+
+def _validate_profile_name(
+    config_data: Mapping[str, Any],
+    profile_registry: Mapping[str, Any],
+) -> str:
     profile_name = str(config_data.get("profile") or DEFAULT_PROFILE.name)
     get_profile(profile_name, profile_registry)
+    return profile_name
+
+
+def _build_audit_config(
+    *,
+    repo_root: Path,
+    config_data: Mapping[str, Any],
+    profile_name: str,
+    profile_registry: Mapping[str, Any],
+) -> AuditConfig:
     return AuditConfig(
         repo_root=repo_root,
         profile=profile_name,
@@ -130,12 +190,9 @@ def load_audit_config(*, repo_root: Path = REPO_ROOT) -> AuditConfig:
             ),
         ),
         coverage=CoverageConfig(
-            coverage_json=(
-                None
-                if not str(config_data["coverage"].get("coverage_json") or "").strip()
-                else resolve_repo_path(
-                    repo_root, str(config_data["coverage"]["coverage_json"])
-                )
+            coverage_json=_resolve_coverage_json(
+                repo_root=repo_root,
+                coverage_data=config_data["coverage"],
             )
         ),
     )
@@ -149,6 +206,17 @@ def _metric_bands(values: dict[str, Any]) -> MetricBands:
         high_max=int(values["high_max"]),
         critical_min=int(values["critical_min"]),
     )
+
+
+def _resolve_coverage_json(
+    *,
+    repo_root: Path,
+    coverage_data: Mapping[str, Any],
+) -> Path | None:
+    coverage_json = str(coverage_data.get("coverage_json") or "").strip()
+    if not coverage_json:
+        return None
+    return resolve_repo_path(repo_root, coverage_json)
 
 
 def resolve_repo_path(repo_root: Path, value: str) -> Path:
