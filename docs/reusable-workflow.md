@@ -74,12 +74,13 @@ Use [ci-gate.md](ci-gate.md) instead when you want full control over every step 
 
 Use a Cremona release that includes `comment-on-pr`. That option is not available in `v0.1.1`.
 
-When you enable PR comments, the caller job must grant `pull-requests: write`:
+When you enable PR comments, the caller job must grant both `actions: read` and `pull-requests: write`:
 
 ```yaml
 jobs:
   cremona:
     permissions:
+      actions: read
       contents: read
       pull-requests: write
     uses: NeapolitanIcecream/cremona/.github/workflows/reusable-gate.yml@<release-with-comment-on-pr>
@@ -100,6 +101,8 @@ The sticky comment runs only when all of these are true:
 - the PR head repository matches the base repository
 
 Fork PRs are skipped. `pull_request_target` is not used.
+
+If the caller workflow overrides permissions and omits `actions: read`, the reusable workflow cannot read the current run metadata it uses to pin the PR comment renderer to the same workflow ref.
 
 ## Example: repository that does not use `uv`
 

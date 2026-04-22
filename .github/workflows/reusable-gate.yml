@@ -225,6 +225,7 @@ jobs:
           from pathlib import Path
           import json
           import os
+          import urllib.error
           import urllib.request
 
           api_url = (
@@ -240,8 +241,17 @@ jobs:
                   "X-GitHub-Api-Version": "2022-11-28",
               },
           )
-          with urllib.request.urlopen(request) as response:
-              payload = json.load(response)
+          try:
+              with urllib.request.urlopen(request) as response:
+                  payload = json.load(response)
+          except urllib.error.HTTPError as exc:
+              if exc.code == 403:
+                  raise SystemExit(
+                      "GitHub token lacks Actions read permission for workflow source "
+                      "lookup. Callers enabling comment-on-pr must grant both "
+                      "actions: read and pull-requests: write."
+                  ) from exc
+              raise
 
           referenced_workflows = payload.get("referenced_workflows", [])
           if not referenced_workflows:

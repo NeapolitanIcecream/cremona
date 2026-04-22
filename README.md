@@ -97,7 +97,7 @@ uvx cremona scan --baseline quality/refactor-baseline.json --coverage-json cover
 
 Read [docs/reusable-workflow.md](docs/reusable-workflow.md) for the fastest GitHub Actions integration, or [docs/ci-gate.md](docs/ci-gate.md) if you want the full custom recipe.
 
-The reusable workflow can also maintain a sticky PR comment with the repo verdict, top routing rows, and top hotspots. See `comment-on-pr` in [docs/reusable-workflow.md](docs/reusable-workflow.md) for the same-repository `pull_request` constraints and required `pull-requests: write` permission.
+The reusable workflow can also maintain a sticky PR comment with the repo verdict, top routing rows, and top hotspots. See `comment-on-pr` in [docs/reusable-workflow.md](docs/reusable-workflow.md) for the same-repository `pull_request` constraints and required caller permissions: `actions: read` and `pull-requests: write`.
 
 ## Install from source for contributors
 
