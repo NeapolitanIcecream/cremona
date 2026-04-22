@@ -4,12 +4,38 @@ version = "0.1.0"
 description = "Proactive refactoring audit for Python repositories."
 readme = "README.md"
 requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+keywords = [
+    "refactoring",
+    "technical-debt",
+    "static-analysis",
+    "python",
+    "code-quality",
+    "ci",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+]
 dependencies = [
     "complexipy>=5.2.0",
     "lizard>=1.21.3",
     "ruff>=0.15.2",
     "vulture>=2.16",
 ]
+
+[project.urls]
+Homepage = "https://github.com/NeapolitanIcecream/cremona"
+Documentation = "https://github.com/NeapolitanIcecream/cremona/tree/main/docs"
+Repository = "https://github.com/NeapolitanIcecream/cremona"
+Issues = "https://github.com/NeapolitanIcecream/cremona/issues"
+Changelog = "https://github.com/NeapolitanIcecream/cremona/releases"
 
 [project.scripts]
 cremona = "cremona.cli:main"

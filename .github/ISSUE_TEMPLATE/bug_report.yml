@@ -1,0 +1,51 @@
+name: Bug report
+description: Report a bug in scanning, packaging, CI guidance, or documentation
+title: "[bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Include the command you ran, the repository shape, and the part of the report that looks wrong.
+  - type: input
+    id: version
+    attributes:
+      label: Cremona version
+      description: Output of `cremona --help`, `pipx list`, or the version you installed
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      placeholder: "3.12"
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command
+      description: Paste the exact command you ran
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: Include the error, wrong queue item, or unexpected report section
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add report excerpts, fixture details, or links to a minimal reproduction
