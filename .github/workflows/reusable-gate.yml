@@ -247,7 +247,20 @@ jobs:
           if not referenced_workflows:
               raise SystemExit("No referenced workflow metadata was found for this run.")
 
-          workflow_ref = referenced_workflows[0]
+          workflow_path_suffix = "/.github/workflows/reusable-gate.yml@"
+          workflow_ref = next(
+              (
+                  item
+                  for item in referenced_workflows
+                  if workflow_path_suffix in str(item.get("path", ""))
+              ),
+              None,
+          )
+          if workflow_ref is None:
+              raise SystemExit(
+                  "Could not find reusable-gate.yml in referenced workflow metadata."
+              )
+
           workflow_path = str(workflow_ref["path"])
           repository = workflow_path.split("/.github/workflows/", 1)[0]
           sha = str(workflow_ref["sha"])
