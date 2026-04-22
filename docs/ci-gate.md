@@ -2,6 +2,8 @@
 
 Use this guide when you want Cremona to fail CI only when structural debt gets worse.
 
+If you want the shortest GitHub Actions setup, start with [reusable-workflow.md](reusable-workflow.md). This page stays focused on the fully inline recipe.
+
 ## 1. Create the baseline once
 
 Run a full scan on the repository and commit the baseline:

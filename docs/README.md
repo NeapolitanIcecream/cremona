@@ -5,6 +5,7 @@ Start here if you want to install Cremona, run a first scan, wire it into CI, or
 ## Start with one of these guides
 
 - [Quickstart](quickstart.md): install Cremona, run a scan, open `report.md`, and read `repo_verdict`.
+- [Reusable workflow](reusable-workflow.md): call Cremona from GitHub Actions without copying the whole job into your repository.
 - [CI gate](ci-gate.md): bootstrap a baseline and fail CI when structural debt regresses.
 - [Report format](report-format.md): understand `repo_verdict`, `agent_routing_queue`, `recommended_refactor_queue`, and `baseline_diff`.
 - [Codex skill](codex-skill.md): use the bundled skill to turn the report into a refactor plan.

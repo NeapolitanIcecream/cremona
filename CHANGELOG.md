@@ -7,6 +7,7 @@ All notable changes to Cremona are documented here.
 ### Added
 
 - Added PR-friendly Cremona CI output through a workflow summary and uploaded report artifact.
+- Added a reusable GitHub workflow so external repositories can call Cremona without copying the full CI job.
 - Added comparison, FAQ, and case study docs to support evaluation and rollout in external repositories.
 
 ## [0.1.0] - 2026-04-22
