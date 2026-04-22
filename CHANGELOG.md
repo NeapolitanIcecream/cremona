@@ -2,6 +2,13 @@
 
 All notable changes to Cremona are documented here.
 
+## [Unreleased]
+
+### Added
+
+- Added PR-friendly Cremona CI output through a workflow summary and uploaded report artifact.
+- Added comparison, FAQ, and case study docs to support evaluation and rollout in external repositories.
+
 ## [0.1.0] - 2026-04-22
 
 ### Highlights
