@@ -21,7 +21,7 @@ jobs:
   cremona:
     permissions:
       contents: read
-    uses: NeapolitanIcecream/cremona/.github/workflows/reusable-gate.yml@main
+    uses: NeapolitanIcecream/cremona/.github/workflows/reusable-gate.yml@v0.1.1
     with:
       setup-command: uv sync --group dev
       test-command: uv run coverage run -m pytest -q
@@ -47,8 +47,6 @@ Use the reusable workflow when:
 - you want a shared adoption path across many repositories
 
 Use [ci-gate.md](ci-gate.md) instead when you want full control over every step in the workflow file.
-
-The reusable workflow was added after `v0.1.0`, so the examples use `@main` for now. Switch to a tagged release ref once the next release is cut.
 
 ## Inputs
 
@@ -76,7 +74,7 @@ jobs:
   cremona:
     permissions:
       contents: read
-    uses: NeapolitanIcecream/cremona/.github/workflows/reusable-gate.yml@main
+    uses: NeapolitanIcecream/cremona/.github/workflows/reusable-gate.yml@v0.1.1
     with:
       setup-command: python -m pip install -U pip && python -m pip install -r requirements-dev.txt
       test-command: python -m coverage run -m pytest -q
