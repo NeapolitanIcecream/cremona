@@ -12,9 +12,11 @@ jobs:
   cremona:
     permissions:
       contents: read
+      pull-requests: write
     uses: ./.github/workflows/reusable-gate.yml
     with:
       setup-command: uv sync --group dev
       test-command: uv run coverage run -m pytest -q
       coverage-json-command: uv run coverage json -o coverage.json
       baseline-path: quality/refactor-baseline.json
+      comment-on-pr: true
