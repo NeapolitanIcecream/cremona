@@ -71,13 +71,13 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ inputs.python-version }}
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
       - name: Setup repository
         if: ${{ inputs.setup-command != '' }}
         shell: bash
@@ -188,7 +188,7 @@ jobs:
           ]
           summary_path.write_text("\n".join(lines), encoding="utf-8")
           PY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: ${{ always() && inputs.upload-artifact }}
         with:
           name: ${{ inputs.artifact-name }}
