@@ -173,3 +173,16 @@ def test_render_pr_comment_includes_marker_once() -> None:
     )
 
     assert markdown.count(pr_comment.COMMENT_MARKER) == 1
+
+
+def test_reusable_gate_renders_pr_comment_without_loading_caller_project() -> None:
+    workflow_path = (
+        Path(__file__).resolve().parents[1]
+        / ".github"
+        / "workflows"
+        / "reusable-gate.yml"
+    )
+
+    workflow_text = workflow_path.read_text(encoding="utf-8")
+
+    assert "uv run --isolated --no-project --with cremona -m cremona.pr_comment" in workflow_text

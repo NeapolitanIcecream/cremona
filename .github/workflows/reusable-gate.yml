@@ -227,7 +227,7 @@ jobs:
             artifact_flag="--artifact-enabled"
           fi
 
-          uv run --isolated --with cremona -m cremona.pr_comment \
+          uv run --isolated --no-project --with cremona -m cremona.pr_comment \
             --report-json "${CREMONA_REPORT_JSON}" \
             --max-comment-rows "${CREMONA_MAX_COMMENT_ROWS}" \
             --max-hotspots "${CREMONA_MAX_HOTSPOTS}" \
