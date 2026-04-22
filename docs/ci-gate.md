@@ -34,6 +34,10 @@ uvx cremona scan --baseline quality/refactor-baseline.json --coverage-json cover
 
 Upload `output/refactor-audit/` so reviewers can open `report.md` even when the job fails.
 
+## 5. Write a PR-friendly summary
+
+Copy the repo verdict and the top queue rows into `GITHUB_STEP_SUMMARY` so reviewers can see the result without opening the artifact first.
+
 ## GitHub Actions recipe
 
 ```yaml
@@ -62,11 +66,64 @@ jobs:
       - run: uv run coverage run -m pytest -q
       - run: uv run coverage json -o coverage.json
       - run: uvx cremona scan --baseline quality/refactor-baseline.json --coverage-json coverage.json --fail-on-regression
+      - name: Write Cremona summary
+        if: always()
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import os
+
+          summary_path = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          report_path = Path("output/refactor-audit/report.md")
+          if not report_path.exists():
+              summary_path.write_text("## Cremona report\n\nNo report was produced.\n", encoding="utf-8")
+              raise SystemExit(0)
+
+          sections = {}
+          current = None
+          for line in report_path.read_text(encoding="utf-8").splitlines():
+              if line.startswith("## "):
+                  current = line[3:]
+                  sections[current] = []
+                  continue
+              if current is not None:
+                  sections[current].append(line)
+
+          verdict = "\n".join(sections.get("Repo verdict", [])).strip()
+          queue_lines = sections.get("Agent routing queue", [])
+          queue_excerpt = []
+          row_count = 0
+          for line in queue_lines:
+              if line.startswith("- History status") or line.startswith("- Lookback days"):
+                  queue_excerpt.append(line)
+                  continue
+              if line.startswith("|"):
+                  queue_excerpt.append(line)
+                  if line.startswith("| `") or line.startswith("| watch") or line.startswith("| investigate"):
+                      row_count += 1
+                      if row_count >= 5:
+                          break
+
+          lines = [
+              "## Cremona report",
+              "",
+              verdict,
+              "",
+              "### Top routing rows",
+              "",
+              *queue_excerpt,
+              "",
+              "Full Markdown and JSON reports are attached as the `cremona-report` artifact.",
+              "",
+          ]
+          summary_path.write_text("\n".join(lines), encoding="utf-8")
+          PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: cremona-report
           path: output/refactor-audit/
+          if-no-files-found: warn
 ```
 
 ## Notes
@@ -74,3 +131,4 @@ jobs:
 - Use `fetch-depth: 0` so git-history scoring can see more than the last commit.
 - Keep `quality/refactor-baseline.json` in version control.
 - Read `report.md` first when the job fails.
+- Keep the summary short. The artifact should carry the full report.

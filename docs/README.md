@@ -10,6 +10,12 @@ Start here if you want to install Cremona, run a first scan, wire it into CI, or
 - [Codex skill](codex-skill.md): use the bundled skill to turn the report into a refactor plan.
 - [Troubleshooting](troubleshooting.md): fix the common setup and signal-health problems.
 
+## Positioning and evaluation
+
+- [Comparison](comparison.md): compare Cremona with Ruff-only workflows, standalone complexity tools, and broader code-quality platforms.
+- [FAQ](faq.md): answer the common adoption questions about coverage, baselines, dead code, and repository scope.
+- [Case study: Typer](case-study-typer.md): see a real scan against `fastapi/typer` from April 22, 2026.
+
 ## Reference
 
 - [Methodology](methodology.md): scoring and interpretation rules.
