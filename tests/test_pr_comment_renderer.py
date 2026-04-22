@@ -189,3 +189,32 @@ def test_reusable_gate_renders_pr_comment_without_loading_caller_project() -> No
     assert 'workflow_path_suffix = "/.github/workflows/reusable-gate.yml@"' in workflow_text
     assert '--with-editable "${CREMONA_RENDERER_SOURCE}" -m cremona.pr_comment' in workflow_text
     assert "uv run --isolated --no-project" in workflow_text
+
+
+def test_reusable_gate_skips_stale_pr_comment_updates() -> None:
+    workflow_path = (
+        Path(__file__).resolve().parents[1]
+        / ".github"
+        / "workflows"
+        / "reusable-gate.yml"
+    )
+
+    workflow_text = workflow_path.read_text(encoding="utf-8")
+
+    assert "CREMONA_PR_HEAD_SHA" in workflow_text
+    assert "Skipping stale Cremona comment update" in workflow_text
+    assert "current PR head is" in workflow_text
+
+
+def test_reusable_gate_selftest_grants_actions_read_for_comment_path() -> None:
+    workflow_path = (
+        Path(__file__).resolve().parents[1]
+        / ".github"
+        / "workflows"
+        / "reusable-gate-selftest.yml"
+    )
+
+    workflow_text = workflow_path.read_text(encoding="utf-8")
+
+    assert "actions: read" in workflow_text
+    assert "comment-on-pr: true" in workflow_text

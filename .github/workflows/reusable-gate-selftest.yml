@@ -11,6 +11,7 @@ permissions:
 jobs:
   cremona:
     permissions:
+      actions: read
       contents: read
       pull-requests: write
     uses: ./.github/workflows/reusable-gate.yml

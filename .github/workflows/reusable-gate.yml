@@ -318,6 +318,7 @@ jobs:
         if: ${{ always() && inputs.comment-on-pr && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
         uses: actions/github-script@v9
         env:
+          CREMONA_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           CREMONA_PR_COMMENT_PATH: ${{ runner.temp }}/cremona-pr-comment.md
         with:
           github-token: ${{ github.token }}
@@ -327,6 +328,21 @@ jobs:
             const marker = "<!-- cremona-report -->"
             const botLogin = "github-actions[bot]"
             const body = fs.readFileSync(process.env.CREMONA_PR_COMMENT_PATH, "utf8")
+            const expectedHeadSha = process.env.CREMONA_PR_HEAD_SHA
+
+            const pullRequest = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            })
+            const currentHeadSha = pullRequest.data.head.sha
+
+            if (currentHeadSha !== expectedHeadSha) {
+              core.info(
+                `Skipping stale Cremona comment update for ${expectedHeadSha}; current PR head is ${currentHeadSha}.`
+              )
+              return
+            }
 
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner,
