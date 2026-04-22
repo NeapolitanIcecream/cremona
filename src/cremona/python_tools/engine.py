@@ -73,6 +73,7 @@ class ScopeLookup:
             vulture_ignored_lines_by_path=vulture_ignored_lines_by_path,
         )
 
+
 def relative_path(path: Path, repo_root: Path) -> str:
     try:
         return path.resolve().relative_to(repo_root.resolve()).as_posix()
@@ -103,22 +104,52 @@ def collect_python_files(
 ) -> list[Path]:
     files: dict[str, Path] = {}
     for target in targets:
-        candidate = Path(target)
-        resolved = candidate if candidate.is_absolute() else (repo_root / candidate)
-        resolved = resolved.resolve()
-        if not resolved.exists():
-            raise FileNotFoundError(f"Scope target does not exist: {target}")
-        if is_excluded(path=resolved, repo_root=repo_root, patterns=exclude_patterns):
-            continue
-        if resolved.is_file():
-            if resolved.suffix == ".py":
-                files[relative_path(resolved, repo_root)] = resolved
-            continue
-        for path in resolved.rglob("*.py"):
-            if is_excluded(path=path, repo_root=repo_root, patterns=exclude_patterns):
-                continue
-            files[relative_path(path, repo_root)] = path.resolve()
+        resolved = _resolve_scope_target(repo_root=repo_root, target=target)
+        _collect_python_target(
+            files=files,
+            repo_root=repo_root,
+            resolved=resolved,
+            exclude_patterns=exclude_patterns,
+        )
     return [files[key] for key in sorted(files)]
+
+
+def _resolve_scope_target(*, repo_root: Path, target: str) -> Path:
+    candidate = Path(target)
+    resolved = candidate if candidate.is_absolute() else (repo_root / candidate)
+    resolved = resolved.resolve()
+    if not resolved.exists():
+        raise FileNotFoundError(f"Scope target does not exist: {target}")
+    return resolved
+
+
+def _collect_python_target(
+    *,
+    files: dict[str, Path],
+    repo_root: Path,
+    resolved: Path,
+    exclude_patterns: tuple[str, ...],
+) -> None:
+    if is_excluded(path=resolved, repo_root=repo_root, patterns=exclude_patterns):
+        return
+    if resolved.is_file():
+        _record_python_file(files=files, repo_root=repo_root, path=resolved)
+        return
+    for path in resolved.rglob("*.py"):
+        if is_excluded(path=path, repo_root=repo_root, patterns=exclude_patterns):
+            continue
+        _record_python_file(files=files, repo_root=repo_root, path=path.resolve())
+
+
+def _record_python_file(
+    *,
+    files: dict[str, Path],
+    repo_root: Path,
+    path: Path,
+) -> None:
+    if path.suffix != ".py":
+        return
+    files[relative_path(path, repo_root)] = path
 
 
 def _candidate_reported_paths(reported: str, lookup: ScopeLookup) -> tuple[str, ...]:

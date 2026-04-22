@@ -8,6 +8,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Literal, cast
 
+import pytest
+
 import cremona.scan as audit
 from cremona.core import engine as core_engine
 from tests._report_builders import (
@@ -394,6 +396,57 @@ def test_parse_complexipy_findings_reads_json_thresholds(tmp_path: Path) -> None
     assert finding.metrics["complexity"] == 55
 
 
+def test_collect_python_files_raises_for_missing_target(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match="Scope target does not exist"):
+        audit.collect_python_files(
+            repo_root=tmp_path,
+            targets=["missing.py"],
+            exclude_patterns=(),
+        )
+
+
+def test_collect_python_files_collects_files_from_directories_and_file_targets(
+    tmp_path: Path,
+) -> None:
+    package_dir = tmp_path / "pkg"
+    package_dir.mkdir()
+    alpha = package_dir / "alpha.py"
+    beta = package_dir / "beta.py"
+    notes = package_dir / "notes.txt"
+    alpha.write_text("pass\n", encoding="utf-8")
+    beta.write_text("pass\n", encoding="utf-8")
+    notes.write_text("ignore\n", encoding="utf-8")
+
+    files = audit.collect_python_files(
+        repo_root=tmp_path,
+        targets=["pkg", "pkg/alpha.py"],
+        exclude_patterns=(),
+    )
+
+    assert files == [alpha.resolve(), beta.resolve()]
+
+
+def test_collect_python_files_skips_excluded_targets_and_children(tmp_path: Path) -> None:
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    kept = src_dir / "kept.py"
+    ignored = src_dir / "ignored.py"
+    skipped_dir = tmp_path / "skip"
+    skipped_dir.mkdir()
+    skipped = skipped_dir / "skip_me.py"
+    kept.write_text("pass\n", encoding="utf-8")
+    ignored.write_text("pass\n", encoding="utf-8")
+    skipped.write_text("pass\n", encoding="utf-8")
+
+    files = audit.collect_python_files(
+        repo_root=tmp_path,
+        targets=["src", "skip"],
+        exclude_patterns=("ignored.py", "skip"),
+    )
+
+    assert files == [kept.resolve()]
+
+
 def test_parse_complexipy_findings_disambiguates_duplicate_basenames(
     tmp_path: Path,
 ) -> None:
@@ -758,6 +811,60 @@ def test_load_audit_config_uses_bootstrap_history_defaults(tmp_path: Path) -> No
     assert config.history.min_shared_commits == 2
     assert config.history.coupling_ignore_commit_file_count == 25
     assert CONFIG.history.min_shared_commits == config.history.min_shared_commits
+
+
+def test_load_audit_config_merges_partial_nested_overrides(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[tool.cremona]
+
+[tool.cremona.ruff]
+warning_min = 12
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config = audit.load_audit_config(repo_root=tmp_path)
+
+    assert config.ruff.warning_min == 12
+    assert config.ruff.warning_max == 15
+    assert config.ruff.high_min == 16
+    assert config.ruff.critical_min == 25
+
+
+def test_load_audit_config_resolves_absolute_paths(tmp_path: Path) -> None:
+    out_dir = tmp_path / "reports"
+    baseline = tmp_path / "quality" / "baseline.json"
+    (tmp_path / "pyproject.toml").write_text(
+        f"""
+[tool.cremona]
+out_dir = "{out_dir}"
+baseline = "{baseline}"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config = audit.load_audit_config(repo_root=tmp_path)
+
+    assert config.out_dir == out_dir
+    assert config.baseline == baseline
+
+
+def test_load_audit_config_normalizes_blank_coverage_json_to_none(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[tool.cremona.coverage]
+coverage_json = "   "
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    config = audit.load_audit_config(repo_root=tmp_path)
+
+    assert config.coverage.coverage_json is None
 
 
 def test_repository_uses_self_host_profile() -> None:
@@ -1199,6 +1306,33 @@ def test_build_history_summary_ignores_sweep_commit_for_coupling() -> None:
     ]
 
 
+def test_build_history_summary_ignores_malformed_numstat_lines() -> None:
+    raw_text = "\n".join(
+        [
+            "commit a1",
+            "1\t0\tpkg/tracked.py",
+            "1\t0",
+            "-\t0\tpkg/tracked.py",
+            "x\t1\tpkg/tracked.py",
+            "1\t0\tpkg/untracked.py",
+            "",
+        ]
+    )
+
+    summary = audit.build_history_summary(
+        raw_text=raw_text,
+        tracked_files={"pkg/tracked.py"},
+        current_scope_files=["pkg/tracked.py"],
+        min_shared_commits=1,
+        coupling_ignore_commit_file_count=10,
+        lookback_days=180,
+    )
+
+    assert summary["files"]["pkg/tracked.py"]["commit_frequency"] == 1
+    assert summary["files"]["pkg/tracked.py"]["churn"] == 1
+    assert summary["files"]["pkg/tracked.py"]["top_coupled_files"] == []
+
+
 def test_history_collection_inputs_include_explicit_scope_files_outside_default_targets(
     tmp_path: Path,
 ) -> None:
@@ -1260,6 +1394,92 @@ def test_load_coverage_summary_prefers_branch_then_line_then_unknown(tmp_path: P
         "fraction": None,
     }
     assert coverage["files"]["pkg/missing.py"] == {
+        "mode": "unknown",
+        "fraction": None,
+    }
+
+
+def test_load_coverage_summary_resolves_absolute_file_paths(tmp_path: Path) -> None:
+    absolute_path = tmp_path / "pkg" / "absolute.py"
+    absolute_path.parent.mkdir(parents=True, exist_ok=True)
+    absolute_path.write_text("pass\n", encoding="utf-8")
+    coverage_path = tmp_path / "coverage.json"
+    coverage_path.write_text(
+        json.dumps(
+            {
+                "files": {
+                    str(absolute_path.resolve()): {
+                        "summary": {
+                            "covered_lines": 3,
+                            "num_statements": 4,
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    coverage = audit.load_coverage_summary(
+        coverage_json=coverage_path,
+        repo_root=tmp_path,
+        tracked_files={"pkg/absolute.py"},
+    )
+
+    assert coverage["status"] == "available"
+    assert coverage["files"]["pkg/absolute.py"] == {
+        "mode": "line",
+        "fraction": 0.75,
+    }
+
+
+def test_load_coverage_summary_returns_unavailable_for_non_mapping_files_section(
+    tmp_path: Path,
+) -> None:
+    coverage_path = tmp_path / "coverage.json"
+    coverage_path.write_text(json.dumps({"files": []}), encoding="utf-8")
+
+    coverage = audit.load_coverage_summary(
+        coverage_json=coverage_path,
+        repo_root=tmp_path,
+        tracked_files={"pkg/example.py"},
+    )
+
+    assert coverage["status"] == "unavailable"
+    assert coverage["files"]["pkg/example.py"] == {
+        "mode": "unknown",
+        "fraction": None,
+    }
+
+
+def test_load_coverage_summary_ignores_non_mapping_entries_and_summaries(
+    tmp_path: Path,
+) -> None:
+    coverage_path = tmp_path / "coverage.json"
+    coverage_path.write_text(
+        json.dumps(
+            {
+                "files": {
+                    "pkg/not_a_mapping.py": [],
+                    "pkg/not_a_summary.py": {"summary": []},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    coverage = audit.load_coverage_summary(
+        coverage_json=coverage_path,
+        repo_root=tmp_path,
+        tracked_files={"pkg/not_a_mapping.py", "pkg/not_a_summary.py"},
+    )
+
+    assert coverage["status"] == "available"
+    assert coverage["files"]["pkg/not_a_mapping.py"] == {
+        "mode": "unknown",
+        "fraction": None,
+    }
+    assert coverage["files"]["pkg/not_a_summary.py"] == {
         "mode": "unknown",
         "fraction": None,
     }
@@ -1903,6 +2123,44 @@ def test_build_repo_verdict_marks_sparse_coverage_as_partial_signal_health() -> 
     assert "missing coverage" in verdict["summary"]
 
 
+def test_build_repo_verdict_marks_existing_refactor_soon_debt_as_strained() -> None:
+    verdict = audit.build_repo_verdict(
+        hotspots=[
+            {
+                "classification": "refactor_soon",
+            }
+        ],
+        baseline_diff={"has_regressions": False, "new": []},
+        agent_routing_queue=[],
+        history_summary={"status": "available"},
+    )
+
+    assert verdict["status"] == "strained"
+    assert verdict["debt_status"] == "strained"
+    assert "Existing structural debt remains" in verdict["summary"]
+
+
+def test_build_repo_verdict_treats_new_refactor_now_hotspot_as_corroding() -> None:
+    verdict = audit.build_repo_verdict(
+        hotspots=[],
+        baseline_diff={
+            "has_regressions": False,
+            "new": [
+                {
+                    "kind": "hotspot",
+                    "after": {"classification": "refactor_now"},
+                }
+            ],
+        },
+        agent_routing_queue=[],
+        history_summary={"status": "available"},
+    )
+
+    assert verdict["status"] == "corroding"
+    assert verdict["debt_status"] == "corroding"
+    assert "Structural debt is regressing" in verdict["summary"]
+
+
 def test_build_baseline_diff_marks_new_hotspots() -> None:
     current_hotspots = [
         {
@@ -2217,6 +2475,18 @@ def test_build_baseline_snapshot_rebuilds_recommended_queue_after_partial_merge(
     assert recommended_other["investigate_now"] == 1
     assert recommended_other["investigate_soon"] == 1
     assert snapshot["recommended_queue"] == snapshot["recommended_refactor_queue"]
+
+
+def test_build_baseline_snapshot_recomputes_history_extrema_after_partial_merge() -> None:
+    baseline_report, report = _partial_scope_snapshot_inputs()
+    snapshot = audit.build_baseline_snapshot(
+        report,
+        baseline_report=baseline_report,
+        scope_files=["pkg/in_scope.py"],
+    )
+
+    assert snapshot["history_summary"]["max_commit_frequency"] == 8
+    assert snapshot["history_summary"]["max_churn"] == 100
 
 
 def test_build_baseline_snapshot_rejects_legacy_baseline_schema() -> None:

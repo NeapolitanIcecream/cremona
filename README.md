@@ -84,7 +84,7 @@ Keep coverage in the regression gate so routing can score coverage risk:
 ```bash
 uv run coverage run -m pytest -q
 uv run coverage json -o coverage.json
-uv run cremona scan --coverage-json coverage.json --fail-on-regression
+uv run cremona scan --baseline quality/refactor-baseline.json --coverage-json coverage.json --fail-on-regression
 ```
 
 `schema_version = 3` is a breaking baseline format. Older baselines are not
@@ -177,6 +177,12 @@ The JSON report keeps these top-level sections:
 - `recommended_refactor_queue`
 - `baseline_diff`
 - `repo_verdict`
+
+`repo_verdict.routing_pressure` is advisory:
+
+- `investigate_now`: take action immediately.
+- `investigate_soon`: plan work soon.
+- `watch_only`: no file currently needs immediate investigation.
 
 ## Methodology
 
