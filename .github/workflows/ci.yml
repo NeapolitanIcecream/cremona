@@ -80,7 +80,7 @@ jobs:
           ]
           summary_path.write_text("\n".join(lines), encoding="utf-8")
           PY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: cremona-report
