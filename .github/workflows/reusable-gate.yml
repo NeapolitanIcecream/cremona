@@ -1,0 +1,196 @@
+name: Cremona Reusable Gate
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: Python version used to run the workflow
+        required: false
+        type: string
+        default: "3.12"
+      working-directory:
+        description: Repository directory where setup, tests, and scan commands run
+        required: false
+        type: string
+        default: "."
+      setup-command:
+        description: Command that prepares the target repository before tests and scan
+        required: false
+        type: string
+        default: "uv sync --group dev"
+      test-command:
+        description: Command that generates coverage data before the Cremona scan
+        required: false
+        type: string
+        default: "uv run coverage run -m pytest -q"
+      coverage-json-command:
+        description: Command that writes a coverage.py JSON export
+        required: false
+        type: string
+        default: "uv run coverage json -o coverage.json"
+      coverage-json-path:
+        description: Path to the coverage JSON file relative to working-directory
+        required: false
+        type: string
+        default: "coverage.json"
+      baseline-path:
+        description: Path to the committed baseline file relative to working-directory
+        required: false
+        type: string
+        default: "quality/refactor-baseline.json"
+      out-dir:
+        description: Output directory for the Markdown, JSON, and raw reports
+        required: false
+        type: string
+        default: "output/refactor-audit"
+      extra-scan-args:
+        description: Extra arguments forwarded to `cremona scan`
+        required: false
+        type: string
+        default: ""
+      fail-on-regression:
+        description: Whether the workflow should fail on structural regressions
+        required: false
+        type: boolean
+        default: true
+      upload-artifact:
+        description: Whether to upload the Cremona report directory as an artifact
+        required: false
+        type: boolean
+        default: true
+      artifact-name:
+        description: Artifact name used when upload-artifact is enabled
+        required: false
+        type: string
+        default: "cremona-report"
+
+jobs:
+  cremona:
+    name: cremona
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+      - uses: astral-sh/setup-uv@v5
+      - name: Setup repository
+        if: ${{ inputs.setup-command != '' }}
+        shell: bash
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.setup-command }}
+      - name: Run tests
+        if: ${{ inputs.test-command != '' }}
+        shell: bash
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.test-command }}
+      - name: Export coverage JSON
+        if: ${{ inputs.coverage-json-command != '' }}
+        shell: bash
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.coverage-json-command }}
+      - name: Run Cremona
+        shell: bash
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          CREMONA_BASELINE_PATH: ${{ inputs.baseline-path }}
+          CREMONA_COVERAGE_JSON_PATH: ${{ inputs.coverage-json-path }}
+          CREMONA_OUT_DIR: ${{ inputs.out-dir }}
+          CREMONA_EXTRA_SCAN_ARGS: ${{ inputs.extra-scan-args }}
+          CREMONA_FAIL_ON_REGRESSION: ${{ inputs.fail-on-regression }}
+        run: |
+          python - <<'PY'
+          import os
+          import shlex
+          import subprocess
+
+          cmd = [
+              "uvx",
+              "cremona",
+              "scan",
+              "--out-dir",
+              os.environ["CREMONA_OUT_DIR"],
+              "--baseline",
+              os.environ["CREMONA_BASELINE_PATH"],
+          ]
+          coverage_path = os.environ["CREMONA_COVERAGE_JSON_PATH"].strip()
+          if coverage_path:
+              cmd.extend(["--coverage-json", coverage_path])
+          if os.environ["CREMONA_FAIL_ON_REGRESSION"] == "true":
+              cmd.append("--fail-on-regression")
+          cmd.extend(shlex.split(os.environ["CREMONA_EXTRA_SCAN_ARGS"]))
+          subprocess.run(cmd, check=True)
+          PY
+      - name: Write Cremona summary
+        if: always()
+        shell: bash
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          CREMONA_OUT_DIR: ${{ inputs.out-dir }}
+          CREMONA_ARTIFACT_NAME: ${{ inputs.artifact-name }}
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import os
+
+          summary_path = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          report_path = Path(os.environ["CREMONA_OUT_DIR"]) / "report.md"
+          if not report_path.exists():
+              summary_path.write_text(
+                  "## Cremona report\n\nNo report was produced.\n",
+                  encoding="utf-8",
+              )
+              raise SystemExit(0)
+
+          sections: dict[str, list[str]] = {}
+          current: str | None = None
+          for line in report_path.read_text(encoding="utf-8").splitlines():
+              if line.startswith("## "):
+                  current = line[3:]
+                  sections[current] = []
+                  continue
+              if current is not None:
+                  sections[current].append(line)
+
+          verdict = "\n".join(sections.get("Repo verdict", [])).strip()
+          queue_lines = sections.get("Agent routing queue", [])
+          queue_excerpt: list[str] = []
+          row_count = 0
+          for line in queue_lines:
+              if line.startswith("- History status") or line.startswith("- Lookback days"):
+                  queue_excerpt.append(line)
+                  continue
+              if line.startswith("|"):
+                  queue_excerpt.append(line)
+                  if line.startswith("| `") or line.startswith("| watch") or line.startswith("| investigate"):
+                      row_count += 1
+                      if row_count >= 5:
+                          break
+
+          lines = [
+              "## Cremona report",
+              "",
+              verdict,
+              "",
+              "### Top routing rows",
+              "",
+              *queue_excerpt,
+              "",
+              (
+                  "Full Markdown and JSON reports are attached as the "
+                  f"`{os.environ['CREMONA_ARTIFACT_NAME']}` artifact when artifact upload is enabled."
+              ),
+              "",
+          ]
+          summary_path.write_text("\n".join(lines), encoding="utf-8")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && inputs.upload-artifact }}
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.working-directory }}/${{ inputs.out-dir }}
+          if-no-files-found: warn

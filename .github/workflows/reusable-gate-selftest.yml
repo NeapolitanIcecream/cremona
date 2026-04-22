@@ -1,0 +1,20 @@
+name: Reusable Gate Self-test
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  cremona:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable-gate.yml
+    with:
+      setup-command: uv sync --group dev
+      test-command: uv run coverage run -m pytest -q
+      coverage-json-command: uv run coverage json -o coverage.json
+      baseline-path: quality/refactor-baseline.json

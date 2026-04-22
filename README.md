@@ -95,7 +95,7 @@ uv run coverage json -o coverage.json
 uvx cremona scan --baseline quality/refactor-baseline.json --coverage-json coverage.json --fail-on-regression
 ```
 
-Read [docs/ci-gate.md](docs/ci-gate.md) for a copyable GitHub Actions recipe.
+Read [docs/reusable-workflow.md](docs/reusable-workflow.md) for the fastest GitHub Actions integration, or [docs/ci-gate.md](docs/ci-gate.md) if you want the full custom recipe.
 
 ## Install from source for contributors
 
@@ -113,6 +113,7 @@ uv run cremona --help
 - [docs/README.md](docs/README.md)
 - [docs/quickstart.md](docs/quickstart.md)
 - [docs/report-format.md](docs/report-format.md)
+- [docs/reusable-workflow.md](docs/reusable-workflow.md)
 - [docs/comparison.md](docs/comparison.md)
 - [docs/faq.md](docs/faq.md)
 - [docs/case-study-typer.md](docs/case-study-typer.md)
