@@ -2,6 +2,12 @@
 
 All notable changes to Cremona are documented here.
 
+## [Unreleased]
+
+### Added
+
+- Added optional sticky PR comments to the reusable GitHub workflow, including same-repository PR gating, fallback behavior when `report.json` is missing, and configurable routing and hotspot limits.
+
 ## [0.1.1] - 2026-04-22
 
 ### Added

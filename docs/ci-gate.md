@@ -40,6 +40,8 @@ Upload `output/refactor-audit/` so reviewers can open `report.md` even when the 
 
 Copy the repo verdict and the top queue rows into `GITHUB_STEP_SUMMARY` so reviewers can see the result without opening the artifact first.
 
+If you also want a sticky PR comment, prefer the reusable workflow's `comment-on-pr` input from [reusable-workflow.md](reusable-workflow.md). This inline recipe stays focused on the report artifact and workflow summary.
+
 ## GitHub Actions recipe
 
 ```yaml
@@ -57,13 +59,13 @@ jobs:
   cremona:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
       - run: uv sync --group dev
       - run: uv run coverage run -m pytest -q
       - run: uv run coverage json -o coverage.json
@@ -120,7 +122,7 @@ jobs:
           ]
           summary_path.write_text("\n".join(lines), encoding="utf-8")
           PY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: cremona-report
@@ -134,3 +136,4 @@ jobs:
 - Keep `quality/refactor-baseline.json` in version control.
 - Read `report.md` first when the job fails.
 - Keep the summary short. The artifact should carry the full report.
+- Use the reusable workflow when you want Cremona to keep a sticky PR comment up to date.
