@@ -21,7 +21,7 @@ jobs:
   cremona:
     permissions:
       contents: read
-    uses: NeapolitanIcecream/cremona/.github/workflows/reusable-gate.yml@v0.1.1
+    uses: NeapolitanIcecream/cremona/.github/workflows/reusable-gate.yml@v0.1.2
     with:
       setup-command: uv sync --group dev
       test-command: uv run coverage run -m pytest -q
@@ -72,7 +72,7 @@ Use [ci-gate.md](ci-gate.md) instead when you want full control over every step 
 
 ## Enable sticky PR comment
 
-Use a Cremona release that includes `comment-on-pr`. That option is not available in `v0.1.1`.
+Use `v0.1.2` or later when enabling `comment-on-pr`.
 
 When you enable PR comments, the caller job must grant both `actions: read` and `pull-requests: write`:
 
@@ -83,7 +83,7 @@ jobs:
       actions: read
       contents: read
       pull-requests: write
-    uses: NeapolitanIcecream/cremona/.github/workflows/reusable-gate.yml@<release-with-comment-on-pr>
+    uses: NeapolitanIcecream/cremona/.github/workflows/reusable-gate.yml@v0.1.2
     with:
       setup-command: uv sync --group dev
       test-command: uv run coverage run -m pytest -q
@@ -113,7 +113,7 @@ jobs:
   cremona:
     permissions:
       contents: read
-    uses: NeapolitanIcecream/cremona/.github/workflows/reusable-gate.yml@v0.1.1
+    uses: NeapolitanIcecream/cremona/.github/workflows/reusable-gate.yml@v0.1.2
     with:
       setup-command: python -m pip install -U pip && python -m pip install -r requirements-dev.txt
       test-command: python -m coverage run -m pytest -q
