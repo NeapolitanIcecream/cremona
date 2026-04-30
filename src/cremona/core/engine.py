@@ -1,21 +1,21 @@
 from __future__ import annotations
 
-import ast
 import argparse
+from collections import defaultdict
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 import json
 import os
-import tempfile
-from collections import Counter, defaultdict
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable, Iterable, Literal, Mapping
+import tempfile
+import time
+from typing import Any, Callable, Iterable, Iterator, Mapping
 
-from ..profiles import DEFAULT_PROFILE, Profile, empty_routing_signals, get_profile
+from ..profiles import Profile, get_profile
 from ..python_tools.engine import (
     ScopeLookup,
     collect_python_files,
-    dead_code_sort_key,
     optional_int,
     parse_complexipy_findings,
     parse_lizard_findings,
@@ -24,9 +24,25 @@ from ..python_tools.engine import (
     relative_path,
     run_command,
 )
+from . import routing as _routing
 from .config import load_audit_config
+from .history import (
+    _GitHistoryCollectionRequest,
+    build_history_summary as build_history_summary,
+    collect_git_history_summary as _collect_git_history_summary,
+)
+from .baseline import (
+    _baseline_report_is_supported,
+    _require_supported_baseline_report,
+    build_baseline_diff,
+    build_baseline_snapshot,
+    dead_code_regression_reasons as dead_code_regression_reasons,
+    hotspot_new_item_is_regression as hotspot_new_item_is_regression,
+    hotspot_regression_reasons as hotspot_regression_reasons,
+    summarize_dead_code as summarize_dead_code,
+    summarize_hotspot as summarize_hotspot,
+)
 from .models import (
-    HOTSPOT_CLASSIFICATION_RANK,
     SCHEMA_VERSION,
     SEVERITY_RANK,
     AuditConfig,
@@ -34,27 +50,35 @@ from .models import (
     AuditToolRunResult,
     HotspotSignal,
     RefactorAuditRunRequest,
-    RoutingFileContext,
     ScanReport,
     ScanRequest,
     _AuditReportContext,
-    _DiffRegressionContext,
+)
+from .reporting import (
+    build_repo_verdict,
+    build_summary,
+    build_summary_from_file_count as build_summary_from_file_count,
+    build_tool_summaries,
+    build_tool_summaries_from_snapshot as build_tool_summaries_from_snapshot,
+    format_tool_metrics as format_tool_metrics,
+    render_markdown_report,
+    severity_summary as severity_summary,
+    severity_summary_from_levels as severity_summary_from_levels,
+    write_json,
+)
+from .routing import (
+    _unknown_coverage_summary,
+    build_agent_routing_index,
+    build_agent_routing_queue,
+    build_recommended_queue,
+    hotspot_sort_key,
+    infer_subsystem,
 )
 
-QUEUE_ORDER = tuple(DEFAULT_PROFILE.queue_order)
-_ACTIVE_PROFILE = DEFAULT_PROFILE
-
-
-@dataclass(frozen=True)
-class _GitHistoryCollectionRequest:
-    repo_root: Path
-    targets: tuple[str, ...]
-    tracked_files: tuple[str, ...]
-    current_scope_files: tuple[str, ...]
-    lookback_days: int
-    min_shared_commits: int
-    coupling_ignore_commit_file_count: int
-    raw_path: Path | None = None
+DEFAULT_PROFILE = _routing.DEFAULT_PROFILE
+empty_routing_signals = _routing.empty_routing_signals
+QUEUE_ORDER = _routing.QUEUE_ORDER
+_ACTIVE_PROFILE = _routing.get_active_profile()
 
 
 @dataclass(frozen=True)
@@ -64,25 +88,107 @@ class _AuditExecutionResult:
     baseline_diff: dict[str, Any]
 
 
+_AUDIT_TIMING_PHASES = (
+    "prepare_scope",
+    "audit_tools",
+    "aggregate_findings",
+    "history_collection",
+    "routing_queue",
+    "baseline_comparison",
+    "repo_verdict",
+    "report_assembly",
+)
+_AUDIT_TIMING_TOOLS = ("ruff", "lizard", "complexipy", "vulture")
+
+
 @dataclass
-class _HistoryAggregationState:
-    commit_frequency: Counter[str]
-    churn: Counter[str]
-    coupling: dict[str, Counter[str]]
-    files_in_commit: set[str]
+class _TimingDiagnostics:
+    clock: Callable[[], float] = time.monotonic
+    phases_ms: dict[str, float] = field(default_factory=dict)
+    tools_ms: dict[str, float] = field(default_factory=dict)
+
+    @contextmanager
+    def track_phase(self, name: str) -> Iterator[None]:
+        if name not in _AUDIT_TIMING_PHASES:
+            raise ValueError(f"Unknown audit timing phase: {name}")
+        start = self.clock()
+        try:
+            yield
+        finally:
+            self._record(self.phases_ms, name, start)
+
+    @contextmanager
+    def track_tool(self, name: str) -> Iterator[None]:
+        if name not in _AUDIT_TIMING_TOOLS:
+            raise ValueError(f"Unknown audit timing tool: {name}")
+        start = self.clock()
+        try:
+            yield
+        finally:
+            self._record(self.tools_ms, name, start)
+
+    def _record(self, target: dict[str, float], name: str, start: float) -> None:
+        duration_ms = max((self.clock() - start) * 1000.0, 0.0)
+        target[name] = round(target.get(name, 0.0) + duration_ms, 3)
+
+    def as_payload(self) -> dict[str, Any]:
+        return {
+            "unit": "milliseconds",
+            "phases": {
+                name: {"duration_ms": self.phases_ms[name]}
+                for name in _AUDIT_TIMING_PHASES
+                if name in self.phases_ms
+            },
+            "tools": {
+                name: {"duration_ms": self.tools_ms[name]}
+                for name in _AUDIT_TIMING_TOOLS
+                if name in self.tools_ms
+            },
+        }
+
+
+@contextmanager
+def _track_phase(
+    timings: _TimingDiagnostics | None,
+    name: str,
+) -> Iterator[None]:
+    if timings is None:
+        yield
+        return
+    with timings.track_phase(name):
+        yield
+
+
+@contextmanager
+def _track_tool(
+    timings: _TimingDiagnostics | None,
+    name: str,
+) -> Iterator[None]:
+    if timings is None:
+        yield
+        return
+    with timings.track_tool(name):
+        yield
 
 
 def _set_active_profile(profile: Profile) -> Profile:
     global _ACTIVE_PROFILE
     global QUEUE_ORDER
-    previous = _ACTIVE_PROFILE
-    _ACTIVE_PROFILE = profile
-    QUEUE_ORDER = tuple(profile.queue_order)
+    previous = _routing.set_active_profile(profile)
+    _ACTIVE_PROFILE = _routing.get_active_profile()
+    QUEUE_ORDER = _routing.QUEUE_ORDER
     return previous
 
 
-def infer_subsystem(rel_path: str) -> str:
-    return _ACTIVE_PROFILE.classify_subsystem(rel_path)
+def collect_git_history_summary(
+    request: _GitHistoryCollectionRequest | None = None,
+    **legacy_kwargs: Any,
+) -> dict[str, Any]:
+    return _collect_git_history_summary(
+        request=request,
+        command_runner=run_command,
+        **legacy_kwargs,
+    )
 
 
 def _has_critical_complexity_signal(
@@ -194,365 +300,6 @@ def aggregate_hotspots(
     return hotspots
 
 
-def hotspot_sort_key(item: dict[str, Any]) -> tuple[Any, ...]:
-    metrics = item.get("metrics", {})
-    return (
-        -HOTSPOT_CLASSIFICATION_RANK[item["classification"]],
-        -int(metrics.get("complexipy", {}).get("complexity", 0)),
-        -int(metrics.get("lizard", {}).get("ccn", 0)),
-        -int(metrics.get("lizard", {}).get("nloc", 0)),
-        -int(metrics.get("ruff", {}).get("complexity", 0)),
-        item["file"],
-        item["symbol"],
-    )
-
-
-def build_tool_summaries(
-    *,
-    ruff_signals: list[HotspotSignal],
-    lizard_signals: list[HotspotSignal],
-    complexipy_signals: list[HotspotSignal],
-    dead_code_candidates: list[dict[str, Any]],
-) -> dict[str, dict[str, Any]]:
-    return {
-        "ruff": severity_summary(ruff_signals),
-        "lizard": severity_summary(lizard_signals),
-        "complexipy": severity_summary(complexipy_signals),
-        "vulture": {
-            "findings_total": len(dead_code_candidates),
-            "review_candidate": sum(
-                1
-                for candidate in dead_code_candidates
-                if candidate["classification"] == "review_candidate"
-            ),
-            "high_confidence_candidate": sum(
-                1
-                for candidate in dead_code_candidates
-                if candidate["classification"] == "high_confidence_candidate"
-            ),
-        },
-    }
-
-
-def severity_summary(signals: list[HotspotSignal]) -> dict[str, int]:
-    counter = Counter(signal.severity for signal in signals)
-    return {
-        "findings_total": len(signals),
-        "warning": int(counter.get("warning", 0)),
-        "high": int(counter.get("high", 0)),
-        "critical": int(counter.get("critical", 0)),
-    }
-
-
-def severity_summary_from_levels(levels: Iterable[str]) -> dict[str, int]:
-    counter = Counter(level for level in levels if level in SEVERITY_RANK)
-    return {
-        "findings_total": sum(counter.values()),
-        "warning": int(counter.get("warning", 0)),
-        "high": int(counter.get("high", 0)),
-        "critical": int(counter.get("critical", 0)),
-    }
-
-
-def build_tool_summaries_from_snapshot(
-    *, hotspots: list[dict[str, Any]], dead_code_candidates: list[dict[str, Any]]
-) -> dict[str, dict[str, Any]]:
-    severities_by_tool: dict[str, list[str]] = {
-        "ruff": [],
-        "lizard": [],
-        "complexipy": [],
-    }
-    for hotspot in hotspots:
-        for signal in hotspot.get("signals", []):
-            tool = signal.get("tool")
-            severity = signal.get("severity")
-            if tool in severities_by_tool and isinstance(severity, str):
-                severities_by_tool[tool].append(severity)
-
-    return {
-        "ruff": severity_summary_from_levels(severities_by_tool["ruff"]),
-        "lizard": severity_summary_from_levels(severities_by_tool["lizard"]),
-        "complexipy": severity_summary_from_levels(severities_by_tool["complexipy"]),
-        "vulture": {
-            "findings_total": len(dead_code_candidates),
-            "review_candidate": sum(
-                1
-                for candidate in dead_code_candidates
-                if candidate["classification"] == "review_candidate"
-            ),
-            "high_confidence_candidate": sum(
-                1
-                for candidate in dead_code_candidates
-                if candidate["classification"] == "high_confidence_candidate"
-            ),
-        },
-    }
-
-
-def _empty_history_file_summary() -> dict[str, Any]:
-    return {
-        "commit_frequency": 0,
-        "churn": 0,
-        "top_coupled_files": [],
-    }
-
-
-def _empty_history_summary(
-    *,
-    current_scope_files: Iterable[str],
-    lookback_days: int,
-    status: Literal["available", "unavailable"],
-) -> dict[str, Any]:
-    return {
-        "status": status,
-        "lookback_days": lookback_days,
-        "max_commit_frequency": 0,
-        "max_churn": 0,
-        "files": {
-            file: _empty_history_file_summary()
-            for file in sorted(set(current_scope_files))
-        },
-    }
-
-
-def _finalize_commit_coupling(
-    *,
-    state: _HistoryAggregationState,
-    coupling_ignore_commit_file_count: int,
-) -> None:
-    file_list = sorted(state.files_in_commit)
-    if (
-        coupling_ignore_commit_file_count > 0
-        and len(file_list) > coupling_ignore_commit_file_count
-    ):
-        return
-    for index, file_name in enumerate(file_list):
-        for other in file_list[index + 1 :]:
-            state.coupling[file_name][other] += 1
-            state.coupling[other][file_name] += 1
-
-
-def _parse_git_numstat_line(raw_line: str) -> tuple[int, int, str] | None:
-    if not raw_line.strip():
-        return None
-    parts = raw_line.split("\t")
-    if len(parts) != 3:
-        return None
-    added, removed, path = parts
-    if added == "-" or removed == "-":
-        return None
-    try:
-        return (int(added), int(removed), path)
-    except ValueError:
-        return None
-
-
-def _record_history_entry(
-    *,
-    entry: tuple[int, int, str],
-    tracked_file_set: set[str],
-    state: _HistoryAggregationState,
-) -> None:
-    added_count, removed_count, path = entry
-    if path not in tracked_file_set:
-        return
-    state.commit_frequency[path] += 1
-    state.churn[path] += added_count + removed_count
-    state.files_in_commit.add(path)
-
-
-def _coupled_history_files(
-    *,
-    file_name: str,
-    coupling: dict[str, Counter[str]],
-    current_scope_set: set[str],
-    min_shared_commits: int,
-) -> list[dict[str, Any]]:
-    return [
-        {
-            "file": other,
-            "shared_commits": shared_commits,
-            "in_scope": other in current_scope_set,
-        }
-        for other, shared_commits in sorted(
-            coupling.get(file_name, {}).items(),
-            key=lambda item: (-item[1], item[0]),
-        )
-        if shared_commits >= min_shared_commits
-    ]
-
-
-def _build_history_files_summary(
-    *,
-    current_scope: tuple[str, ...],
-    current_scope_set: set[str],
-    tracked_file_set: set[str],
-    state: _HistoryAggregationState,
-    min_shared_commits: int,
-) -> tuple[int, int, dict[str, Any]]:
-    max_commit_frequency = max(
-        (state.commit_frequency[file_name] for file_name in tracked_file_set),
-        default=0,
-    )
-    max_churn = max(
-        (state.churn[file_name] for file_name in tracked_file_set),
-        default=0,
-    )
-    files = {
-        file_name: {
-            "commit_frequency": int(state.commit_frequency.get(file_name, 0)),
-            "churn": int(state.churn.get(file_name, 0)),
-            "top_coupled_files": _coupled_history_files(
-                file_name=file_name,
-                coupling=state.coupling,
-                current_scope_set=current_scope_set,
-                min_shared_commits=min_shared_commits,
-            ),
-        }
-        for file_name in current_scope
-    }
-    return (int(max_commit_frequency), int(max_churn), files)
-
-
-def build_history_summary(
-    *,
-    raw_text: str,
-    tracked_files: Iterable[str],
-    current_scope_files: Iterable[str],
-    min_shared_commits: int,
-    coupling_ignore_commit_file_count: int,
-    lookback_days: int,
-) -> dict[str, Any]:
-    tracked_file_set = set(tracked_files)
-    current_scope = tuple(sorted(set(current_scope_files)))
-    current_scope_set = set(current_scope)
-    state = _HistoryAggregationState(
-        commit_frequency=Counter(),
-        churn=Counter(),
-        coupling=defaultdict(Counter),
-        files_in_commit=set(),
-    )
-
-    for raw_line in raw_text.splitlines():
-        line = raw_line.strip()
-        if raw_line.startswith("commit "):
-            _finalize_commit_coupling(
-                state=state,
-                coupling_ignore_commit_file_count=coupling_ignore_commit_file_count,
-            )
-            state.files_in_commit = set()
-            continue
-        if not line:
-            continue
-        parsed_entry = _parse_git_numstat_line(raw_line)
-        if parsed_entry is None:
-            continue
-        _record_history_entry(
-            entry=parsed_entry,
-            tracked_file_set=tracked_file_set,
-            state=state,
-        )
-    _finalize_commit_coupling(
-        state=state,
-        coupling_ignore_commit_file_count=coupling_ignore_commit_file_count,
-    )
-    max_commit_frequency, max_churn, files = _build_history_files_summary(
-        current_scope=current_scope,
-        current_scope_set=current_scope_set,
-        tracked_file_set=tracked_file_set,
-        state=state,
-        min_shared_commits=min_shared_commits,
-    )
-    return {
-        "status": "available",
-        "lookback_days": lookback_days,
-        "max_commit_frequency": max_commit_frequency,
-        "max_churn": max_churn,
-        "files": files,
-    }
-
-
-def _coerce_git_history_collection_request(
-    *,
-    request: _GitHistoryCollectionRequest | None = None,
-    legacy_kwargs: dict[str, Any] | None = None,
-) -> _GitHistoryCollectionRequest:
-    if request is not None:
-        return request
-    values = dict(legacy_kwargs or {})
-    return _GitHistoryCollectionRequest(
-        repo_root=values["repo_root"],
-        targets=tuple(values["targets"]),
-        tracked_files=tuple(values["tracked_files"]),
-        current_scope_files=tuple(values["current_scope_files"]),
-        lookback_days=int(values["lookback_days"]),
-        min_shared_commits=int(values["min_shared_commits"]),
-        coupling_ignore_commit_file_count=int(
-            values["coupling_ignore_commit_file_count"]
-        ),
-        raw_path=values.get("raw_path"),
-    )
-
-
-def collect_git_history_summary(
-    request: _GitHistoryCollectionRequest | None = None,
-    **legacy_kwargs: Any,
-) -> dict[str, Any]:
-    resolved_request = _coerce_git_history_collection_request(
-        request=request,
-        legacy_kwargs=legacy_kwargs,
-    )
-    tracked_file_set = set(resolved_request.tracked_files)
-    if not tracked_file_set:
-        return _empty_history_summary(
-            current_scope_files=resolved_request.current_scope_files,
-            lookback_days=resolved_request.lookback_days,
-            status="unavailable",
-        )
-    since = (
-        datetime.now(UTC) - timedelta(days=resolved_request.lookback_days)
-    ).date().isoformat()
-    try:
-        completed = run_command(
-            command=[
-                "git",
-                "log",
-                f"--since={since}",
-                "--numstat",
-                "--format=commit %H",
-                "--",
-                *resolved_request.targets,
-            ],
-            cwd=resolved_request.repo_root,
-            allowed_returncodes={0},
-        )
-    except RuntimeError:
-        if resolved_request.raw_path is not None:
-            resolved_request.raw_path.write_text("", encoding="utf-8")
-        return _empty_history_summary(
-            current_scope_files=resolved_request.current_scope_files,
-            lookback_days=resolved_request.lookback_days,
-            status="unavailable",
-        )
-    if resolved_request.raw_path is not None:
-        resolved_request.raw_path.write_text(completed.stdout, encoding="utf-8")
-    return build_history_summary(
-        raw_text=completed.stdout,
-        tracked_files=tracked_file_set,
-        current_scope_files=resolved_request.current_scope_files,
-        min_shared_commits=resolved_request.min_shared_commits,
-        coupling_ignore_commit_file_count=resolved_request.coupling_ignore_commit_file_count,
-        lookback_days=resolved_request.lookback_days,
-    )
-
-
-def _unknown_coverage_summary() -> dict[str, Any]:
-    return {
-        "mode": "unknown",
-        "fraction": None,
-    }
-
-
 def _initial_coverage_files(tracked_files: Iterable[str]) -> dict[str, dict[str, Any]]:
     return {
         file_name: _unknown_coverage_summary() for file_name in sorted(set(tracked_files))
@@ -632,1173 +379,6 @@ def load_coverage_summary(
         "files": files,
     }
 
-
-def _assigns_all_symbol(node: ast.AST) -> bool:
-    targets = getattr(node, "targets", None)
-    if isinstance(node, ast.Assign) and isinstance(targets, list):
-        return any(isinstance(target, ast.Name) and target.id == "__all__" for target in targets)
-    if isinstance(node, ast.AnnAssign):
-        return isinstance(node.target, ast.Name) and node.target.id == "__all__"
-    return False
-
-
-def _is_facade_import(node: ast.AST) -> bool:
-    if isinstance(node, ast.ImportFrom):
-        return ".facade" in (node.module or "")
-    if isinstance(node, ast.Import):
-        return any(".facade" in alias.name for alias in node.names)
-    return False
-
-
-def build_agent_routing_index(
-    *,
-    repo_root: Path,
-    files: list[Path],
-) -> dict[str, dict[str, int]]:
-    return _ACTIVE_PROFILE.build_routing_index(repo_root, files)
-
-
-def _empty_routing_signals() -> dict[str, int]:
-    return empty_routing_signals(_ACTIVE_PROFILE)
-
-
-def _summarize_file_hotspots(file_hotspots: list[dict[str, Any]]) -> dict[str, Any]:
-    ordered = sorted(file_hotspots, key=hotspot_sort_key)
-    monitor_count = sum(1 for item in ordered if item["classification"] == "monitor")
-    multi_tool_monitor = sum(
-        1
-        for item in ordered
-        if item["classification"] == "monitor" and int(item.get("tool_count", 0)) > 1
-    )
-    return {
-        "refactor_now": sum(
-            1 for item in ordered if item["classification"] == "refactor_now"
-        ),
-        "refactor_soon": sum(
-            1 for item in ordered if item["classification"] == "refactor_soon"
-        ),
-        "monitor": monitor_count,
-        "multi_tool_monitor": multi_tool_monitor,
-        "top_symbols": [
-            {
-                "symbol": item["symbol"],
-                "classification": item["classification"],
-            }
-            for item in ordered[:5]
-        ],
-    }
-
-
-def _priority_band(priority_score: int) -> Literal["watch", "investigate_soon", "investigate_now"]:
-    if priority_score >= 60:
-        return "investigate_now"
-    if priority_score >= 35:
-        return "investigate_soon"
-    return "watch"
-
-
-def _missing_signals(
-    *,
-    history_summary: dict[str, Any] | None,
-    agent_routing_queue: list[dict[str, Any]],
-) -> list[str]:
-    missing: list[str] = []
-    if history_summary is not None and history_summary.get("status") != "available":
-        missing.append("git_history")
-    if agent_routing_queue and not all(
-        item.get("coverage", {}).get("mode") in {"branch", "line"}
-        for item in agent_routing_queue
-    ):
-        missing.append("coverage")
-    return missing
-
-
-def _signal_health(
-    *,
-    history_summary: dict[str, Any] | None,
-    agent_routing_queue: list[dict[str, Any]],
-) -> tuple[str, list[str]]:
-    missing_signals = _missing_signals(
-        history_summary=history_summary,
-        agent_routing_queue=agent_routing_queue,
-    )
-    if not missing_signals:
-        return ("full", [])
-    if len(missing_signals) >= 2:
-        return ("minimal", missing_signals)
-    return ("partial", missing_signals)
-
-
-def _routing_pressure(agent_routing_queue: list[dict[str, Any]]) -> str:
-    if any(item["priority_band"] == "investigate_now" for item in agent_routing_queue):
-        return "investigate_now"
-    if any(
-        item["priority_band"] == "investigate_soon" for item in agent_routing_queue
-    ):
-        return "investigate_soon"
-    if agent_routing_queue:
-        return "watch_only"
-    return "none"
-
-
-def _count_dead_code_candidates(
-    file_dead_code: list[dict[str, Any]],
-) -> tuple[int, int]:
-    high_confidence_dead_code = sum(
-        1
-        for item in file_dead_code
-        if item["classification"] == "high_confidence_candidate"
-    )
-    review_candidate_dead_code = sum(
-        1 for item in file_dead_code if item["classification"] == "review_candidate"
-    )
-    return (high_confidence_dead_code, review_candidate_dead_code)
-
-
-def _change_score(
-    *,
-    commit_frequency: int,
-    churn: int,
-    max_commit_frequency: int,
-    max_churn: int,
-) -> int:
-    score = 0
-    if max_commit_frequency > 0:
-        score += round(20 * commit_frequency / max_commit_frequency)
-    if max_churn > 0:
-        score += round(10 * churn / max_churn)
-    return score
-
-
-def _coupling_score(top_coupled_files: list[dict[str, Any]]) -> int:
-    max_shared_commits = max(
-        (int(item.get("shared_commits", 0)) for item in top_coupled_files),
-        default=0,
-    )
-    return min(15, 2 * len(top_coupled_files) + min(5, max_shared_commits))
-
-
-def _static_score(hotspot_summary: dict[str, Any]) -> int:
-    return min(
-        20,
-        5 * int(hotspot_summary["refactor_now"])
-        + 3 * int(hotspot_summary["refactor_soon"])
-        + int(hotspot_summary["monitor"])
-        + int(hotspot_summary["multi_tool_monitor"]),
-    )
-
-
-def _dead_code_score(
-    *,
-    high_confidence_dead_code: int,
-    review_candidate_dead_code: int,
-) -> int:
-    return min(
-        10,
-        3 * high_confidence_dead_code + review_candidate_dead_code // 4,
-    )
-
-
-def _coverage_risk_score(coverage_entry: dict[str, Any]) -> int:
-    coverage_fraction = coverage_entry.get("fraction")
-    if coverage_fraction is None:
-        return 0
-    return round((1 - float(coverage_fraction)) * 10)
-
-
-def _priority_score_floor(hotspot_summary: dict[str, Any]) -> int:
-    if int(hotspot_summary.get("refactor_now", 0)) > 0:
-        return 35
-    return 0
-
-
-def _routing_priority_components(
-    context: RoutingFileContext,
-) -> tuple[dict[str, int], list[str]]:
-    commit_frequency = int(context.history_entry.get("commit_frequency", 0))
-    churn = int(context.history_entry.get("churn", 0))
-    top_coupled_files = list(context.history_entry.get("top_coupled_files", []))
-    hotspot_summary = _summarize_file_hotspots(context.file_hotspots)
-    change_score = _change_score(
-        commit_frequency=commit_frequency,
-        churn=churn,
-        max_commit_frequency=context.max_commit_frequency,
-        max_churn=context.max_churn,
-    )
-    coupling_score = _coupling_score(top_coupled_files)
-    high_confidence_dead_code, review_candidate_dead_code = _count_dead_code_candidates(
-        context.file_dead_code
-    )
-    components = {
-        "change_score": change_score,
-        "coupling_score": coupling_score,
-        "static_score": _static_score(hotspot_summary),
-        "subsystem_priority_score": _ACTIVE_PROFILE.subsystem_priority_score(
-            infer_subsystem(context.file_name)
-        ),
-        "dead_code_score": _dead_code_score(
-            high_confidence_dead_code=high_confidence_dead_code,
-            review_candidate_dead_code=review_candidate_dead_code,
-        ),
-        "coverage_risk_score": _coverage_risk_score(context.coverage_entry),
-    }
-    components["routing_signal_score"] = _ACTIVE_PROFILE.routing_signal_score(
-        context.routing_signals
-    )
-    routing_bonus_score, triggered = _ACTIVE_PROFILE.evaluate_routing_bonus_rules(
-        routing_signals=context.routing_signals,
-        components=components,
-    )
-    components["routing_bonus_score"] = routing_bonus_score
-    return (components, triggered)
-
-
-def _build_agent_routing_item(context: RoutingFileContext) -> dict[str, Any]:
-    hotspot_summary = _summarize_file_hotspots(context.file_hotspots)
-    priority_components, routing_rules_triggered = _routing_priority_components(context)
-    priority_score = max(
-        _priority_score_floor(hotspot_summary),
-        max(0, min(100, sum(priority_components.values()))),
-    )
-    return {
-        "file": context.file_name,
-        "subsystem": infer_subsystem(context.file_name),
-        "priority_score": priority_score,
-        "priority_band": _priority_band(priority_score),
-        "change_frequency": int(context.history_entry.get("commit_frequency", 0)),
-        "churn": int(context.history_entry.get("churn", 0)),
-        "top_coupled_files": list(context.history_entry.get("top_coupled_files", [])),
-        "hotspot_summary": hotspot_summary,
-        "routing_signals": context.routing_signals,
-        "routing_rules_triggered": routing_rules_triggered,
-        "dead_code_candidate_count": len(context.file_dead_code),
-        "coverage": dict(context.coverage_entry),
-        "priority_components": priority_components,
-    }
-
-
-def build_agent_routing_queue(
-    *,
-    scope_files: list[str],
-    hotspots: list[dict[str, Any]],
-    dead_code_candidates: list[dict[str, Any]],
-    history_summary: dict[str, Any],
-    coverage_summary: dict[str, Any],
-    routing_index: dict[str, dict[str, int]],
-) -> list[dict[str, Any]]:
-    hotspots_by_file: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for hotspot in hotspots:
-        hotspots_by_file[hotspot["file"]].append(hotspot)
-    dead_code_by_file: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for candidate in dead_code_candidates:
-        dead_code_by_file[candidate["file"]].append(candidate)
-
-    max_commit_frequency = int(history_summary.get("max_commit_frequency", 0))
-    max_churn = int(history_summary.get("max_churn", 0))
-    queue: list[dict[str, Any]] = []
-    for file_name in sorted(set(scope_files)):
-        history_entry = history_summary.get("files", {}).get(
-            file_name, _empty_history_file_summary()
-        )
-        coverage_entry = coverage_summary.get("files", {}).get(
-            file_name, _unknown_coverage_summary()
-        )
-        routing_signals = dict(
-            routing_index.get(file_name, _empty_routing_signals())
-        )
-        file_dead_code = dead_code_by_file.get(file_name, [])
-        queue.append(
-            _build_agent_routing_item(
-                RoutingFileContext(
-                    file_name=file_name,
-                    history_entry=history_entry,
-                    coverage_entry=coverage_entry,
-                    routing_signals=routing_signals,
-                    file_hotspots=hotspots_by_file.get(file_name, []),
-                    file_dead_code=file_dead_code,
-                    max_commit_frequency=max_commit_frequency,
-                    max_churn=max_churn,
-                )
-            )
-        )
-    queue.sort(key=agent_routing_sort_key)
-    return queue
-
-
-def agent_routing_sort_key(item: dict[str, Any]) -> tuple[Any, ...]:
-    components = item.get("priority_components", {})
-    return (
-        -int(item["priority_score"]),
-        -int(components.get("static_score", 0)),
-        -int(components.get("change_score", 0)),
-        item["file"],
-    )
-
-
-def _group_agent_routing_queue(
-    agent_routing_queue: list[dict[str, Any]],
-) -> dict[str, list[dict[str, Any]]]:
-    grouped: dict[str, list[dict[str, Any]]] = {name: [] for name in QUEUE_ORDER}
-    for item in agent_routing_queue:
-        grouped.setdefault(item["subsystem"], []).append(item)
-    return grouped
-
-
-def _sorted_subsystem_items(
-    grouped: Mapping[str, list[dict[str, Any]]],
-    subsystem: str,
-) -> list[dict[str, Any]]:
-    return sorted(grouped.get(subsystem, []), key=agent_routing_sort_key)
-
-
-def _priority_band_count(
-    items: list[dict[str, Any]],
-    priority_band: str,
-) -> int:
-    return sum(1 for item in items if item["priority_band"] == priority_band)
-
-
-def _top_targets(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [
-        {
-            "file": item["file"],
-            "priority_band": item["priority_band"],
-            "priority_score": item["priority_score"],
-        }
-        for item in items[:5]
-    ]
-
-
-def _recommended_queue_entry(
-    *,
-    subsystem: str,
-    items: list[dict[str, Any]],
-) -> dict[str, Any]:
-    return {
-        "subsystem": subsystem,
-        "investigate_now": _priority_band_count(items, "investigate_now"),
-        "investigate_soon": _priority_band_count(items, "investigate_soon"),
-        "watch": _priority_band_count(items, "watch"),
-        "top_targets": _top_targets(items),
-    }
-
-
-def _extra_subsystems(
-    grouped: Mapping[str, list[dict[str, Any]]],
-) -> list[str]:
-    return sorted(
-        subsystem
-        for subsystem in grouped
-        if subsystem not in QUEUE_ORDER and grouped[subsystem]
-    )
-
-
-def build_recommended_queue(agent_routing_queue: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    grouped = _group_agent_routing_queue(agent_routing_queue)
-    ordered_subsystems = [*QUEUE_ORDER, *_extra_subsystems(grouped)]
-    return [
-        _recommended_queue_entry(
-            subsystem=subsystem,
-            items=_sorted_subsystem_items(grouped, subsystem),
-        )
-        for subsystem in ordered_subsystems
-    ]
-
-
-def build_baseline_diff(
-    *,
-    current_hotspots: list[dict[str, Any]],
-    current_dead_code_candidates: list[dict[str, Any]],
-    baseline_report: dict[str, Any] | None,
-    scope_files: list[str],
-    config: AuditConfig,
-) -> dict[str, Any]:
-    scoped_files = set(scope_files)
-    if baseline_report is None:
-        return _empty_baseline_diff()
-    _require_supported_baseline_report(baseline_report)
-
-    baseline_hotspots = _baseline_items_by_id(
-        baseline_report=baseline_report,
-        key="hotspots",
-        scoped_files=scoped_files,
-    )
-    current_hotspots_by_id = {item["id"]: item for item in current_hotspots}
-    baseline_dead_code = _baseline_items_by_id(
-        baseline_report=baseline_report,
-        key="dead_code_candidates",
-        scoped_files=scoped_files,
-    )
-    current_dead_code_by_id = {
-        item["id"]: item for item in current_dead_code_candidates
-    }
-
-    diff_items = {"new": [], "worsened": [], "resolved": []}
-    _collect_item_regressions(
-        diff_items=diff_items,
-        context=_DiffRegressionContext(
-            current_items_by_id=current_hotspots_by_id,
-            baseline_items_by_id=baseline_hotspots,
-            kind="hotspot",
-            summarize=summarize_hotspot,
-            new_item_is_regression=lambda item: hotspot_new_item_is_regression(
-                item,
-                config=config,
-            ),
-            regression_reasons=lambda previous, item: hotspot_regression_reasons(
-                previous,
-                item,
-                config=config,
-            ),
-        ),
-    )
-    _collect_resolved_items(
-        diff_items=diff_items,
-        current_items_by_id=current_hotspots_by_id,
-        baseline_items_by_id=baseline_hotspots,
-        kind="hotspot",
-        summarize=summarize_hotspot,
-    )
-    _collect_item_regressions(
-        diff_items=diff_items,
-        context=_DiffRegressionContext(
-            current_items_by_id=current_dead_code_by_id,
-            baseline_items_by_id=baseline_dead_code,
-            kind="dead_code",
-            summarize=summarize_dead_code,
-            new_item_is_regression=lambda _item: True,
-            regression_reasons=dead_code_regression_reasons,
-        ),
-    )
-    _collect_resolved_items(
-        diff_items=diff_items,
-        current_items_by_id=current_dead_code_by_id,
-        baseline_items_by_id=baseline_dead_code,
-        kind="dead_code",
-        summarize=summarize_dead_code,
-    )
-    _sort_diff_items(diff_items)
-
-    return {
-        "baseline_available": True,
-        "baseline_path": baseline_report.get("_baseline_path"),
-        "has_regressions": bool(diff_items["new"] or diff_items["worsened"]),
-        "new": diff_items["new"],
-        "worsened": diff_items["worsened"],
-        "resolved": diff_items["resolved"],
-    }
-
-
-def _empty_baseline_diff() -> dict[str, Any]:
-    return {
-        "baseline_available": False,
-        "baseline_path": None,
-        "has_regressions": False,
-        "new": [],
-        "worsened": [],
-        "resolved": [],
-    }
-
-
-def _baseline_items_by_id(
-    *,
-    baseline_report: dict[str, Any],
-    key: str,
-    scoped_files: set[str],
-) -> dict[str, dict[str, Any]]:
-    return {
-        item["id"]: item
-        for item in baseline_report.get(key, [])
-        if item.get("file") in scoped_files
-    }
-
-
-def _collect_item_regressions(
-    *,
-    diff_items: dict[str, list[dict[str, Any]]],
-    context: _DiffRegressionContext,
-) -> None:
-    for item_id, item in context.current_items_by_id.items():
-        previous = context.baseline_items_by_id.get(item_id)
-        if previous is None:
-            if context.new_item_is_regression(item):
-                diff_items["new"].append(
-                    {
-                        "kind": context.kind,
-                        "id": item_id,
-                        "file": item["file"],
-                        "symbol": item["symbol"],
-                        "after": context.summarize(item),
-                    }
-                )
-            continue
-        reasons = context.regression_reasons(previous, item)
-        if reasons:
-            diff_items["worsened"].append(
-                {
-                    "kind": context.kind,
-                    "id": item_id,
-                    "file": item["file"],
-                    "symbol": item["symbol"],
-                    "before": context.summarize(previous),
-                    "after": context.summarize(item),
-                    "reasons": reasons,
-                }
-            )
-
-
-def _collect_resolved_items(
-    *,
-    diff_items: dict[str, list[dict[str, Any]]],
-    current_items_by_id: dict[str, dict[str, Any]],
-    baseline_items_by_id: dict[str, dict[str, Any]],
-    kind: str,
-    summarize: Callable[[dict[str, Any]], dict[str, Any]],
-) -> None:
-    for item_id, item in baseline_items_by_id.items():
-        if item_id in current_items_by_id:
-            continue
-        diff_items["resolved"].append(
-            {
-                "kind": kind,
-                "id": item_id,
-                "file": item["file"],
-                "symbol": item["symbol"],
-                "before": summarize(item),
-            }
-        )
-
-
-def _sort_diff_items(diff_items: dict[str, list[dict[str, Any]]]) -> None:
-    for key in diff_items:
-        diff_items[key].sort(
-            key=lambda item: (item["kind"], item["file"], item["symbol"])
-        )
-
-
-def summarize_hotspot(item: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "classification": item["classification"],
-        "tools": item["tools"],
-        "metrics": item["metrics"],
-    }
-
-
-def summarize_dead_code(item: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "classification": item["classification"],
-        "confidence": item["confidence"],
-        "kind": item["kind"],
-        "size": item.get("size"),
-    }
-
-
-def hotspot_new_item_is_regression(
-    item: dict[str, Any], *, config: AuditConfig
-) -> bool:
-    if item["classification"] != "monitor":
-        return True
-    if set(item.get("tools", [])) != {"lizard"}:
-        return True
-    return _hotspot_signal_reasons(item, config=config) != {"lizard.nloc"}
-
-
-def hotspot_regression_reasons(
-    previous: dict[str, Any], current: dict[str, Any], *, config: AuditConfig
-) -> list[str]:
-    reasons: list[str] = []
-    if (
-        HOTSPOT_CLASSIFICATION_RANK[current["classification"]]
-        > HOTSPOT_CLASSIFICATION_RANK[previous["classification"]]
-    ):
-        reasons.append("classification")
-
-    previous_metrics = previous.get("metrics", {})
-    current_metrics = current.get("metrics", {})
-    for tool_name, metric_name in (
-        ("ruff", "complexity"),
-        ("complexipy", "complexity"),
-        ("lizard", "ccn"),
-        ("lizard", "nloc"),
-        ("lizard", "parameter_count"),
-    ):
-        old_rank = _hotspot_metric_severity_rank(
-            tool_name=tool_name,
-            metric_name=metric_name,
-            value=int(previous_metrics.get(tool_name, {}).get(metric_name, 0)),
-            config=config,
-        )
-        new_rank = _hotspot_metric_severity_rank(
-            tool_name=tool_name,
-            metric_name=metric_name,
-            value=int(current_metrics.get(tool_name, {}).get(metric_name, 0)),
-            config=config,
-        )
-        if new_rank > old_rank:
-            reasons.append(f"{tool_name}.{metric_name}")
-
-    if len(set(current.get("tools", []))) > len(set(previous.get("tools", []))):
-        reasons.append("tool_overlap")
-    return sorted(set(reasons))
-
-
-def _hotspot_signal_reasons(item: dict[str, Any], *, config: AuditConfig) -> set[str]:
-    reasons: set[str] = set()
-    metrics = item.get("metrics", {})
-    for tool_name, metric_name in (
-        ("ruff", "complexity"),
-        ("complexipy", "complexity"),
-        ("lizard", "ccn"),
-        ("lizard", "nloc"),
-        ("lizard", "parameter_count"),
-    ):
-        metric_values = metrics.get(tool_name, {})
-        rank = _hotspot_metric_severity_rank(
-            tool_name=tool_name,
-            metric_name=metric_name,
-            value=int(metric_values.get(metric_name, 0)),
-            config=config,
-        )
-        if rank > 0:
-            reasons.add(f"{tool_name}.{metric_name}")
-    return reasons
-
-
-def _hotspot_metric_severity_rank(
-    *,
-    tool_name: str,
-    metric_name: str,
-    value: int,
-    config: AuditConfig,
-) -> int:
-    if value <= 0:
-        return 0
-
-    if tool_name == "ruff":
-        severity = config.ruff.classify(value)
-    elif tool_name == "complexipy":
-        severity = config.complexipy.classify(value)
-    elif tool_name == "lizard":
-        band = getattr(config.lizard, metric_name)
-        severity = band.classify(value)
-    else:
-        raise ValueError(
-            f"Unsupported hotspot metric source: {tool_name}.{metric_name}"
-        )
-
-    if severity is None:
-        return 0
-    return SEVERITY_RANK[severity]
-
-
-def dead_code_regression_reasons(
-    previous: dict[str, Any], current: dict[str, Any]
-) -> list[str]:
-    reasons: list[str] = []
-    order = {"review_candidate": 1, "high_confidence_candidate": 2}
-    if order[current["classification"]] > order[previous["classification"]]:
-        reasons.append("classification")
-    if int(current["confidence"]) > int(previous["confidence"]):
-        reasons.append("confidence")
-    return reasons
-
-
-def _resolve_debt_status(
-    *,
-    hotspots: list[dict[str, Any]],
-    baseline_diff: dict[str, Any],
-) -> tuple[str, str, int]:
-    has_regressions = bool(baseline_diff.get("has_regressions"))
-    current_refactor_now = [
-        hotspot for hotspot in hotspots if hotspot["classification"] == "refactor_now"
-    ]
-    current_refactor_soon = any(
-        hotspot["classification"] == "refactor_soon" for hotspot in hotspots
-    )
-    new_refactor_now = any(
-        item["kind"] == "hotspot" and item["after"]["classification"] == "refactor_now"
-        for item in baseline_diff.get("new", [])
-    )
-    if has_regressions or new_refactor_now:
-        return (
-            "corroding",
-            "Structural debt is regressing in the current scope.",
-            len(current_refactor_now),
-        )
-    if current_refactor_now or current_refactor_soon:
-        return (
-            "strained",
-            "Existing structural debt remains, but the current scope did not regress.",
-            len(current_refactor_now),
-        )
-    return (
-        "stable",
-        "No structural debt regressions were detected in the current scope.",
-        len(current_refactor_now),
-    )
-
-
-def _build_repo_verdict_summary(
-    *,
-    base_summary: str,
-    routing_pressure: str,
-    signal_health: str,
-    missing_signals: list[str],
-) -> str:
-    summary = base_summary
-    if routing_pressure in {"investigate_now", "investigate_soon"}:
-        summary = f"{summary} Routing pressure is {routing_pressure}."
-    if not missing_signals:
-        return summary
-    missing_label = ", ".join(missing_signals)
-    if routing_pressure in {"investigate_now", "investigate_soon"}:
-        return (
-            f"{base_summary} Routing pressure is {routing_pressure}. "
-            f"Signal health is {signal_health}: missing {missing_label}."
-        )
-    return f"{base_summary} Signal health is {signal_health}: missing {missing_label}."
-
-
-def build_repo_verdict(
-    *,
-    hotspots: list[dict[str, Any]],
-    baseline_diff: dict[str, Any],
-    agent_routing_queue: list[dict[str, Any]],
-    history_summary: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    has_regressions = bool(baseline_diff.get("has_regressions"))
-    debt_status, base_summary, refactor_now_total = _resolve_debt_status(
-        hotspots=hotspots,
-        baseline_diff=baseline_diff,
-    )
-    routing_pressure = _routing_pressure(agent_routing_queue)
-    signal_health, missing_signals = _signal_health(
-        history_summary=history_summary,
-        agent_routing_queue=agent_routing_queue,
-    )
-    summary = _build_repo_verdict_summary(
-        base_summary=base_summary,
-        routing_pressure=routing_pressure,
-        signal_health=signal_health,
-        missing_signals=missing_signals,
-    )
-    return {
-        "status": debt_status,
-        "debt_status": debt_status,
-        "routing_pressure": routing_pressure,
-        "summary": summary,
-        "has_regressions": has_regressions,
-        "signal_health": signal_health,
-        "missing_signals": missing_signals,
-        "refactor_now_total": refactor_now_total,
-        "investigate_now_total": sum(
-            1 for item in agent_routing_queue if item["priority_band"] == "investigate_now"
-        ),
-        "investigate_soon_total": sum(
-            1
-            for item in agent_routing_queue
-            if item["priority_band"] == "investigate_soon"
-        ),
-    }
-
-
-def build_summary(
-    *,
-    files: list[Path],
-    hotspots: list[dict[str, Any]],
-    dead_code_candidates: list[dict[str, Any]],
-    agent_routing_queue: list[dict[str, Any]],
-) -> dict[str, Any]:
-    return build_summary_from_file_count(
-        file_count=len(files),
-        hotspots=hotspots,
-        dead_code_candidates=dead_code_candidates,
-        agent_routing_queue=agent_routing_queue,
-    )
-
-
-def build_summary_from_file_count(
-    *,
-    file_count: int,
-    hotspots: list[dict[str, Any]],
-    dead_code_candidates: list[dict[str, Any]],
-    agent_routing_queue: list[dict[str, Any]],
-) -> dict[str, Any]:
-    hotspot_counter = Counter(item["classification"] for item in hotspots)
-    dead_counter = Counter(item["classification"] for item in dead_code_candidates)
-    routing_counter = Counter(item["priority_band"] for item in agent_routing_queue)
-    return {
-        "files_scanned": file_count,
-        "hotspots_total": len(hotspots),
-        "monitor_total": int(hotspot_counter.get("monitor", 0)),
-        "refactor_soon_total": int(hotspot_counter.get("refactor_soon", 0)),
-        "refactor_now_total": int(hotspot_counter.get("refactor_now", 0)),
-        "dead_code_candidates_total": len(dead_code_candidates),
-        "dead_code_high_confidence_total": int(
-            dead_counter.get("high_confidence_candidate", 0)
-        ),
-        "agent_routing_queue_total": len(agent_routing_queue),
-        "investigate_now_total": int(routing_counter.get("investigate_now", 0)),
-        "investigate_soon_total": int(routing_counter.get("investigate_soon", 0)),
-        "watch_total": int(routing_counter.get("watch", 0)),
-    }
-
-
-def _render_repo_verdict_lines(
-    *,
-    summary: dict[str, Any],
-    repo_verdict: dict[str, Any],
-) -> list[str]:
-    lines = [
-        "## Repo verdict",
-        "",
-        f"- Status: `{repo_verdict['status']}`",
-        f"- Debt status: `{repo_verdict.get('debt_status', repo_verdict['status'])}`",
-        f"- Routing pressure: `{repo_verdict.get('routing_pressure', 'none')}`",
-        f"- Signal health: `{repo_verdict.get('signal_health', 'full')}`",
-    ]
-    if repo_verdict.get("missing_signals"):
-        lines.append(f"- Missing signals: {', '.join(repo_verdict['missing_signals'])}")
-    lines.extend(
-        [
-            f"- Summary: {repo_verdict['summary']}",
-            f"- Files scanned: {summary['files_scanned']}",
-            f"- Hotspots: {summary['hotspots_total']} total, "
-            f"{summary['refactor_now_total']} `refactor_now`, "
-            f"{summary['refactor_soon_total']} `refactor_soon`, "
-            f"{summary['monitor_total']} `monitor`",
-            f"- Agent routing queue: {summary.get('agent_routing_queue_total', 0)} total, "
-            f"{summary.get('investigate_now_total', 0)} `investigate_now`, "
-            f"{summary.get('investigate_soon_total', 0)} `investigate_soon`, "
-            f"{summary.get('watch_total', 0)} `watch`",
-            f"- Dead code candidates: {summary['dead_code_candidates_total']} total, "
-            f"{summary['dead_code_high_confidence_total']} high-confidence",
-        ]
-    )
-    return lines
-
-
-def _render_tool_summary_lines(tool_summaries: dict[str, Any]) -> list[str]:
-    lines = [
-        "## Tool summaries",
-        "",
-        "| Tool | Total | Warning | High | Critical |",
-        "| --- | ---: | ---: | ---: | ---: |",
-    ]
-    for tool_name in ("ruff", "lizard", "complexipy"):
-        item = tool_summaries[tool_name]
-        lines.append(
-            f"| {tool_name} | {item['findings_total']} | {item['warning']} | "
-            f"{item['high']} | {item['critical']} |"
-        )
-    vulture_summary = tool_summaries["vulture"]
-    lines.extend(
-        [
-            "",
-            f"Vulture candidates: {vulture_summary['findings_total']} total, "
-            f"{vulture_summary['high_confidence_candidate']} high-confidence, "
-            f"{vulture_summary['review_candidate']} review candidates.",
-        ]
-    )
-    return lines
-
-
-def _coverage_label(coverage: dict[str, Any]) -> str:
-    if coverage.get("fraction") is not None:
-        return f"{coverage['mode']} {coverage['fraction']:.2f}"
-    return str(coverage["mode"])
-
-
-def _render_agent_routing_lines(
-    *,
-    agent_routing_queue: list[dict[str, Any]],
-    history_summary: dict[str, Any],
-) -> list[str]:
-    lines = [
-        "## Agent routing queue",
-        "",
-        f"- History status: {history_summary.get('status', 'unavailable')}",
-        f"- Lookback days: {history_summary.get('lookback_days', 0)}",
-        "",
-        "| Priority | Score | File | Change | Coverage | Coupling |",
-        "| --- | ---: | --- | --- | --- | --- |",
-    ]
-    if not agent_routing_queue:
-        lines.append("| none | 0 | - | - | - | - |")
-        return lines
-    for item in agent_routing_queue[:15]:
-        change_label = f"{item['change_frequency']} commits / {item['churn']} churn"
-        coupling_label = ", ".join(
-            f"{coupled['file']} ({coupled['shared_commits']})"
-            for coupled in item["top_coupled_files"][:2]
-        ) or "-"
-        lines.append(
-            f"| {item['priority_band']} | {item['priority_score']} | "
-            f"{item['file']} | {change_label} | {_coverage_label(item['coverage'])} | "
-            f"{coupling_label} |"
-        )
-    return lines
-
-
-def _render_hotspot_lines(hotspots: list[dict[str, Any]]) -> list[str]:
-    lines = [
-        "## Top hotspots",
-        "",
-        "| Classification | Tools | File | Symbol | Notes |",
-        "| --- | ---: | --- | --- | --- |",
-    ]
-    if not hotspots:
-        lines.append("| none | 0 | - | - | - |")
-        return lines
-    for hotspot in hotspots[:15]:
-        notes = ", ".join(
-            f"{tool}:{format_tool_metrics(tool, hotspot['metrics'][tool])}"
-            for tool in hotspot["tools"]
-        )
-        lines.append(
-            f"| {hotspot['classification']} | {hotspot['tool_count']} | "
-            f"{hotspot['file']} | {hotspot['symbol']} | {notes} |"
-        )
-    return lines
-
-
-def _render_dead_code_lines(dead_code_candidates: list[dict[str, Any]]) -> list[str]:
-    lines = [
-        "## Dead code candidates",
-        "",
-        "| Classification | Confidence | File | Symbol | Kind |",
-        "| --- | ---: | --- | --- | --- |",
-    ]
-    if not dead_code_candidates:
-        lines.append("| none | 0 | - | - | - |")
-        return lines
-    for candidate in dead_code_candidates[:15]:
-        lines.append(
-            f"| {candidate['classification']} | {candidate['confidence']}% | "
-            f"{candidate['file']} | {candidate['symbol']} | {candidate['kind']} |"
-        )
-    return lines
-
-
-def _render_baseline_diff_lines(baseline_diff: dict[str, Any]) -> list[str]:
-    lines = [
-        "## Baseline diff",
-        "",
-        f"- Baseline available: {baseline_diff['baseline_available']}",
-        f"- Regressions detected: {baseline_diff['has_regressions']}",
-        f"- New: {len(baseline_diff['new'])}",
-        f"- Worsened: {len(baseline_diff['worsened'])}",
-        f"- Resolved: {len(baseline_diff['resolved'])}",
-    ]
-    for label in ("new", "worsened", "resolved"):
-        items = baseline_diff[label]
-        if not items:
-            continue
-        lines.extend(["", f"### {label.title()}", ""])
-        for item in items[:10]:
-            lines.append(f"- `{item['kind']}` {item['file']} :: {item['symbol']}")
-    return lines
-
-
-def render_markdown_report(report: dict[str, Any]) -> str:
-    summary = report["summary"]
-    repo_verdict = report["repo_verdict"]
-    tool_summaries = report["tool_summaries"]
-    hotspots = report["hotspots"]
-    agent_routing_queue = report.get("agent_routing_queue", [])
-    history_summary = report.get("history_summary", {})
-    dead_code_candidates = report["dead_code_candidates"]
-    baseline_diff = report["baseline_diff"]
-    queue = report.get("recommended_queue", report["recommended_refactor_queue"])
-
-    lines = ["# Refactor Audit", ""]
-    lines.extend(_render_repo_verdict_lines(summary=summary, repo_verdict=repo_verdict))
-    lines.extend([""])
-    lines.extend(_render_tool_summary_lines(tool_summaries))
-    lines.extend([""])
-    lines.extend(
-        _render_agent_routing_lines(
-            agent_routing_queue=agent_routing_queue,
-            history_summary=history_summary,
-        )
-    )
-    lines.extend([""])
-    lines.extend(_render_hotspot_lines(hotspots))
-    lines.extend([""])
-    lines.extend(_render_dead_code_lines(dead_code_candidates))
-    lines.extend([""])
-    lines.extend(_render_baseline_diff_lines(baseline_diff))
-
-    lines.extend(
-        [
-            "",
-            "## Recommended refactor queue",
-            "",
-            "| Subsystem | Investigate now | Investigate soon | Watch |",
-            "| --- | ---: | ---: | ---: |",
-        ]
-    )
-    for item in queue:
-        lines.append(
-            f"| {item['subsystem']} | {item['investigate_now']} | "
-            f"{item['investigate_soon']} | {item['watch']} |"
-        )
-    return "\n".join(lines) + "\n"
-
-
-def format_tool_metrics(tool_name: str, metrics: dict[str, int]) -> str:
-    if tool_name == "lizard":
-        return (
-            f"CCN={metrics.get('ccn', 0)}, "
-            f"NLOC={metrics.get('nloc', 0)}, "
-            f"PARAM={metrics.get('parameter_count', 0)}"
-        )
-    if tool_name in {"ruff", "complexipy"}:
-        return f"complexity={metrics.get('complexity', 0)}"
-    return ", ".join(f"{key}={value}" for key, value in sorted(metrics.items()))
-
-
-def write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
-
-
-def _merge_partial_scope_items(
-    *,
-    baseline_items: list[dict[str, Any]],
-    current_items: list[dict[str, Any]],
-    scoped_file_set: set[str],
-    sort_key: Callable[[dict[str, Any]], tuple[Any, ...]],
-) -> list[dict[str, Any]]:
-    return sorted(
-        [
-            item
-            for item in baseline_items
-            if item.get("file") not in scoped_file_set
-        ]
-        + current_items,
-        key=sort_key,
-    )
-
-
-def _merge_partial_scope_history(
-    *,
-    baseline_report: dict[str, Any],
-    current_history: dict[str, Any],
-    scoped_file_set: set[str],
-) -> dict[str, Any]:
-    baseline_history = baseline_report.get("history_summary", {})
-    merged_history_files = dict(baseline_history.get("files", {}))
-    merged_history_files.update(
-        {
-            file_name: item
-            for file_name, item in current_history.get("files", {}).items()
-            if file_name in scoped_file_set
-        }
-    )
-    return {
-        "status": current_history.get(
-            "status", baseline_history.get("status", "unavailable")
-        ),
-        "lookback_days": int(
-            current_history.get(
-                "lookback_days", baseline_history.get("lookback_days", 0)
-            )
-        ),
-        "max_commit_frequency": max(
-            (
-                int(item.get("commit_frequency", 0))
-                for item in merged_history_files.values()
-            ),
-            default=0,
-        ),
-        "max_churn": max(
-            (int(item.get("churn", 0)) for item in merged_history_files.values()),
-            default=0,
-        ),
-        "files": dict(sorted(merged_history_files.items())),
-    }
-
-
-def _rebuild_snapshot_rollups(
-    *,
-    snapshot: dict[str, Any],
-    preserved_scope: dict[str, Any],
-) -> None:
-    scope_files_value = preserved_scope.get("files", [])
-    file_count = preserved_scope.get("file_count", len(scope_files_value))
-    snapshot["scope"] = preserved_scope
-    snapshot["summary"] = build_summary_from_file_count(
-        file_count=int(file_count),
-        hotspots=snapshot["hotspots"],
-        dead_code_candidates=snapshot["dead_code_candidates"],
-        agent_routing_queue=snapshot["agent_routing_queue"],
-    )
-    snapshot["tool_summaries"] = build_tool_summaries_from_snapshot(
-        hotspots=snapshot["hotspots"],
-        dead_code_candidates=snapshot["dead_code_candidates"],
-    )
-    recommended_queue = build_recommended_queue(snapshot["agent_routing_queue"])
-    snapshot["recommended_queue"] = recommended_queue
-    snapshot["recommended_refactor_queue"] = recommended_queue
-
-
-def build_baseline_snapshot(
-    report: dict[str, Any],
-    *,
-    baseline_report: dict[str, Any] | None = None,
-    scope_files: Iterable[str] | None = None,
-) -> dict[str, Any]:
-    snapshot = dict(report)
-    scoped_file_set = set(scope_files or [])
-    if baseline_report is not None:
-        _require_supported_baseline_report(baseline_report)
-    if baseline_report is not None and scoped_file_set:
-        snapshot["hotspots"] = _merge_partial_scope_items(
-            baseline_items=baseline_report.get("hotspots", []),
-            current_items=snapshot["hotspots"],
-            scoped_file_set=scoped_file_set,
-            sort_key=hotspot_sort_key,
-        )
-        snapshot["dead_code_candidates"] = _merge_partial_scope_items(
-            baseline_items=baseline_report.get("dead_code_candidates", []),
-            current_items=snapshot["dead_code_candidates"],
-            scoped_file_set=scoped_file_set,
-            sort_key=dead_code_sort_key,
-        )
-        snapshot["agent_routing_queue"] = _merge_partial_scope_items(
-            baseline_items=baseline_report.get("agent_routing_queue", []),
-            current_items=snapshot["agent_routing_queue"],
-            scoped_file_set=scoped_file_set,
-            sort_key=agent_routing_sort_key,
-        )
-        snapshot["history_summary"] = _merge_partial_scope_history(
-            baseline_report=baseline_report,
-            current_history=snapshot.get("history_summary", {}),
-            scoped_file_set=scoped_file_set,
-        )
-        preserved_scope = baseline_report.get("scope", snapshot["scope"])
-        _rebuild_snapshot_rollups(snapshot=snapshot, preserved_scope=preserved_scope)
-    snapshot["baseline_diff"] = {
-        "baseline_available": False,
-        "baseline_path": None,
-        "has_regressions": False,
-        "new": [],
-        "worsened": [],
-        "resolved": [],
-    }
-    snapshot["repo_verdict"] = build_repo_verdict(
-        hotspots=snapshot["hotspots"],
-        baseline_diff=snapshot["baseline_diff"],
-        agent_routing_queue=snapshot.get("agent_routing_queue", []),
-        history_summary=snapshot.get("history_summary"),
-    )
-    return snapshot
-
-
 def _coerce_refactor_audit_run_request(
     *,
     request: RefactorAuditRunRequest | None = None,
@@ -1840,7 +420,7 @@ def _prepare_audit_scope(request: RefactorAuditRunRequest) -> AuditScopeState:
     lookup = ScopeLookup.from_files(
         repo_root=request.config.repo_root,
         files=files,
-        ignored_decorators=_ACTIVE_PROFILE.dead_code_ignored_decorators,
+        ignored_decorators=_routing.get_active_profile().dead_code_ignored_decorators,
     )
     request.out_dir.mkdir(parents=True, exist_ok=True)
     raw_dir = request.out_dir / "raw"
@@ -1999,48 +579,44 @@ def _run_vulture_audit(
 def _run_audit_tools(
     scope_state: AuditScopeState,
     request: RefactorAuditRunRequest,
+    *,
+    timings: _TimingDiagnostics | None = None,
 ) -> AuditToolRunResult:
     file_args = [str(path) for path in scope_state.files]
-    return AuditToolRunResult(
-        ruff_signals=_run_ruff_audit(
+    with _track_tool(timings, "ruff"):
+        ruff_signals = _run_ruff_audit(
             file_args=file_args,
             raw_dir=scope_state.raw_dir,
             lookup=scope_state.lookup,
             config=request.config,
-        ),
-        lizard_signals=_run_lizard_audit(
-            file_args=file_args,
-            raw_dir=scope_state.raw_dir,
-            lookup=scope_state.lookup,
-            config=request.config,
-        ),
-        complexipy_signals=_run_complexipy_audit(
-            file_args=file_args,
-            raw_dir=scope_state.raw_dir,
-            lookup=scope_state.lookup,
-            config=request.config,
-        ),
-        dead_code_candidates=_run_vulture_audit(
-            file_args=file_args,
-            raw_dir=scope_state.raw_dir,
-            lookup=scope_state.lookup,
-            config=request.config,
-        ),
-    )
-
-
-def _require_supported_baseline_report(baseline_report: dict[str, Any]) -> None:
-    schema_version = optional_int(baseline_report.get("schema_version"))
-    if schema_version is None or schema_version < SCHEMA_VERSION:
-        raise RuntimeError(
-            f"Baseline schema version {schema_version!r} is no longer supported. "
-            f"Regenerate the baseline with Cremona schema version {SCHEMA_VERSION}."
         )
-
-
-def _baseline_report_is_supported(baseline_report: dict[str, Any]) -> bool:
-    schema_version = optional_int(baseline_report.get("schema_version"))
-    return schema_version is not None and schema_version >= SCHEMA_VERSION
+    with _track_tool(timings, "lizard"):
+        lizard_signals = _run_lizard_audit(
+            file_args=file_args,
+            raw_dir=scope_state.raw_dir,
+            lookup=scope_state.lookup,
+            config=request.config,
+        )
+    with _track_tool(timings, "complexipy"):
+        complexipy_signals = _run_complexipy_audit(
+            file_args=file_args,
+            raw_dir=scope_state.raw_dir,
+            lookup=scope_state.lookup,
+            config=request.config,
+        )
+    with _track_tool(timings, "vulture"):
+        dead_code_candidates = _run_vulture_audit(
+            file_args=file_args,
+            raw_dir=scope_state.raw_dir,
+            lookup=scope_state.lookup,
+            config=request.config,
+        )
+    return AuditToolRunResult(
+        ruff_signals=ruff_signals,
+        lizard_signals=lizard_signals,
+        complexipy_signals=complexipy_signals,
+        dead_code_candidates=dead_code_candidates,
+    )
 
 
 def _load_baseline_report(
@@ -2180,52 +756,59 @@ def _execute_refactor_audit(
     request: RefactorAuditRunRequest,
     scope_state: AuditScopeState,
     tool_run: AuditToolRunResult,
+    timings: _TimingDiagnostics | None = None,
 ) -> _AuditExecutionResult:
-    hotspots, tool_summaries = _build_hotspots_and_tool_summaries(
-        tool_run=tool_run,
-        config=request.config,
-    )
-    history_summary = _collect_history_summary_for_scope(
-        request=request,
-        scope_state=scope_state,
-    )
-    agent_routing_queue = _build_agent_routing_queue_for_scope(
-        request=request,
-        scope_state=scope_state,
-        hotspots=hotspots,
-        dead_code_candidates=tool_run.dead_code_candidates,
-        history_summary=history_summary,
-    )
-    baseline_report = _load_comparable_baseline_report(
-        request=request,
-        scope_state=scope_state,
-    )
-    baseline_diff = build_baseline_diff(
-        current_hotspots=hotspots,
-        current_dead_code_candidates=tool_run.dead_code_candidates,
-        baseline_report=baseline_report,
-        scope_files=scope_state.current_scope_files,
-        config=request.config,
-    )
-    repo_verdict = build_repo_verdict(
-        hotspots=hotspots,
-        baseline_diff=baseline_diff,
-        agent_routing_queue=agent_routing_queue,
-        history_summary=history_summary,
-    )
-    report = _build_audit_report(
-        _AuditReportContext(
+    with _track_phase(timings, "aggregate_findings"):
+        hotspots, tool_summaries = _build_hotspots_and_tool_summaries(
+            tool_run=tool_run,
+            config=request.config,
+        )
+    with _track_phase(timings, "history_collection"):
+        history_summary = _collect_history_summary_for_scope(
+            request=request,
+            scope_state=scope_state,
+        )
+    with _track_phase(timings, "routing_queue"):
+        agent_routing_queue = _build_agent_routing_queue_for_scope(
             request=request,
             scope_state=scope_state,
             hotspots=hotspots,
             dead_code_candidates=tool_run.dead_code_candidates,
+            history_summary=history_summary,
+        )
+    with _track_phase(timings, "baseline_comparison"):
+        baseline_report = _load_comparable_baseline_report(
+            request=request,
+            scope_state=scope_state,
+        )
+        baseline_diff = build_baseline_diff(
+            current_hotspots=hotspots,
+            current_dead_code_candidates=tool_run.dead_code_candidates,
+            baseline_report=baseline_report,
+            scope_files=scope_state.current_scope_files,
+            config=request.config,
+        )
+    with _track_phase(timings, "repo_verdict"):
+        repo_verdict = build_repo_verdict(
+            hotspots=hotspots,
+            baseline_diff=baseline_diff,
             agent_routing_queue=agent_routing_queue,
             history_summary=history_summary,
-            tool_summaries=tool_summaries,
-            baseline_diff=baseline_diff,
-            repo_verdict=repo_verdict,
         )
-    )
+    with _track_phase(timings, "report_assembly"):
+        report = _build_audit_report(
+            _AuditReportContext(
+                request=request,
+                scope_state=scope_state,
+                hotspots=hotspots,
+                dead_code_candidates=tool_run.dead_code_candidates,
+                agent_routing_queue=agent_routing_queue,
+                history_summary=history_summary,
+                tool_summaries=tool_summaries,
+                baseline_diff=baseline_diff,
+                repo_verdict=repo_verdict,
+            )
+        )
     return _AuditExecutionResult(
         report=report,
         baseline_report=baseline_report,
@@ -2278,13 +861,22 @@ def run_refactor_audit(
         )
     )
     try:
-        scope_state = _prepare_audit_scope(resolved_request)
-        tool_run = _run_audit_tools(scope_state, resolved_request)
+        timings = _TimingDiagnostics()
+        with _track_phase(timings, "prepare_scope"):
+            scope_state = _prepare_audit_scope(resolved_request)
+        with _track_phase(timings, "audit_tools"):
+            tool_run = _run_audit_tools(
+                scope_state,
+                resolved_request,
+                timings=timings,
+            )
         execution = _execute_refactor_audit(
             request=resolved_request,
             scope_state=scope_state,
             tool_run=tool_run,
+            timings=timings,
         )
+        execution.report["diagnostics"] = {"timings": timings.as_payload()}
         _write_audit_outputs(out_dir=resolved_request.out_dir, report=execution.report)
         _maybe_update_baseline(
             request=resolved_request,
