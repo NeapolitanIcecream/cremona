@@ -44,19 +44,18 @@ Start with `report.md`. It gives you the repo verdict, the file queue, the top h
 
 ## Example verdict and queue
 
-This excerpt comes from Cremona's current self-host report.
+A self-host scan can report a stable baseline and still show routing pressure. That means the current scan did not regress against the baseline, but one or more files still deserve attention in the routing queue.
 
-- Repo verdict: `stable`
-- Routing pressure: `watch_only`
-- Signal health: `full`
+Read these fields first:
 
-| Priority | Score | File | Why it stays visible |
-| --- | ---: | --- | --- |
-| `watch` | 33 | `src/cremona/core/engine.py` | `5` commits, `2444` churn, branch coverage `0.82`, coupled with `tests/test_cremona_scan.py` |
-| `watch` | 32 | `tests/test_cremona_scan.py` | `8` commits, `4168` churn, branch coverage `1.00`, coupled with `src/cremona/core/engine.py` |
-| `watch` | 27 | `src/cremona/scan.py` | `2` commits, `5870` churn, line coverage `1.00`, coupled with `src/cremona/core/__init__.py` |
+| Field | What it tells you |
+| --- | --- |
+| `Debt status` | Whether structural debt regressed against the baseline. |
+| `Routing pressure` | How urgently to inspect the queue: `watch_only`, `investigate_soon`, or `investigate_now`. |
+| `Signal health` | Whether history and configured coverage inputs were available. Missing inputs are listed in the verdict. |
+| `Agent routing queue` | Prioritized files with score, change, coverage, and coupling evidence. |
 
-On a repository with active structural pressure, the same queue will surface `investigate_soon` and `investigate_now` rows.
+Exact scores and row order change with git history, coverage data, and profile settings, so use the queue as a routing guide rather than a fixed benchmark.
 
 ## Codex and agent workflow
 
