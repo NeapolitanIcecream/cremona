@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import argparse
+from collections import defaultdict
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 import json
 import os
-import tempfile
-from collections import defaultdict
-from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+import tempfile
+import time
+from typing import Any, Callable, Iterable, Iterator, Mapping
 
 from ..profiles import Profile, get_profile
 from ..python_tools.engine import (
@@ -84,6 +86,89 @@ class _AuditExecutionResult:
     report: dict[str, Any]
     baseline_report: dict[str, Any] | None
     baseline_diff: dict[str, Any]
+
+
+_AUDIT_TIMING_PHASES = (
+    "prepare_scope",
+    "audit_tools",
+    "aggregate_findings",
+    "history_collection",
+    "routing_queue",
+    "baseline_comparison",
+    "repo_verdict",
+    "report_assembly",
+)
+_AUDIT_TIMING_TOOLS = ("ruff", "lizard", "complexipy", "vulture")
+
+
+@dataclass
+class _TimingDiagnostics:
+    clock: Callable[[], float] = time.monotonic
+    phases_ms: dict[str, float] = field(default_factory=dict)
+    tools_ms: dict[str, float] = field(default_factory=dict)
+
+    @contextmanager
+    def track_phase(self, name: str) -> Iterator[None]:
+        if name not in _AUDIT_TIMING_PHASES:
+            raise ValueError(f"Unknown audit timing phase: {name}")
+        start = self.clock()
+        try:
+            yield
+        finally:
+            self._record(self.phases_ms, name, start)
+
+    @contextmanager
+    def track_tool(self, name: str) -> Iterator[None]:
+        if name not in _AUDIT_TIMING_TOOLS:
+            raise ValueError(f"Unknown audit timing tool: {name}")
+        start = self.clock()
+        try:
+            yield
+        finally:
+            self._record(self.tools_ms, name, start)
+
+    def _record(self, target: dict[str, float], name: str, start: float) -> None:
+        duration_ms = max((self.clock() - start) * 1000.0, 0.0)
+        target[name] = round(target.get(name, 0.0) + duration_ms, 3)
+
+    def as_payload(self) -> dict[str, Any]:
+        return {
+            "unit": "milliseconds",
+            "phases": {
+                name: {"duration_ms": self.phases_ms[name]}
+                for name in _AUDIT_TIMING_PHASES
+                if name in self.phases_ms
+            },
+            "tools": {
+                name: {"duration_ms": self.tools_ms[name]}
+                for name in _AUDIT_TIMING_TOOLS
+                if name in self.tools_ms
+            },
+        }
+
+
+@contextmanager
+def _track_phase(
+    timings: _TimingDiagnostics | None,
+    name: str,
+) -> Iterator[None]:
+    if timings is None:
+        yield
+        return
+    with timings.track_phase(name):
+        yield
+
+
+@contextmanager
+def _track_tool(
+    timings: _TimingDiagnostics | None,
+    name: str,
+) -> Iterator[None]:
+    if timings is None:
+        yield
+        return
+    with timings.track_tool(name):
+        yield
 
 
 def _set_active_profile(profile: Profile) -> Profile:
@@ -494,33 +579,43 @@ def _run_vulture_audit(
 def _run_audit_tools(
     scope_state: AuditScopeState,
     request: RefactorAuditRunRequest,
+    *,
+    timings: _TimingDiagnostics | None = None,
 ) -> AuditToolRunResult:
     file_args = [str(path) for path in scope_state.files]
+    with _track_tool(timings, "ruff"):
+        ruff_signals = _run_ruff_audit(
+            file_args=file_args,
+            raw_dir=scope_state.raw_dir,
+            lookup=scope_state.lookup,
+            config=request.config,
+        )
+    with _track_tool(timings, "lizard"):
+        lizard_signals = _run_lizard_audit(
+            file_args=file_args,
+            raw_dir=scope_state.raw_dir,
+            lookup=scope_state.lookup,
+            config=request.config,
+        )
+    with _track_tool(timings, "complexipy"):
+        complexipy_signals = _run_complexipy_audit(
+            file_args=file_args,
+            raw_dir=scope_state.raw_dir,
+            lookup=scope_state.lookup,
+            config=request.config,
+        )
+    with _track_tool(timings, "vulture"):
+        dead_code_candidates = _run_vulture_audit(
+            file_args=file_args,
+            raw_dir=scope_state.raw_dir,
+            lookup=scope_state.lookup,
+            config=request.config,
+        )
     return AuditToolRunResult(
-        ruff_signals=_run_ruff_audit(
-            file_args=file_args,
-            raw_dir=scope_state.raw_dir,
-            lookup=scope_state.lookup,
-            config=request.config,
-        ),
-        lizard_signals=_run_lizard_audit(
-            file_args=file_args,
-            raw_dir=scope_state.raw_dir,
-            lookup=scope_state.lookup,
-            config=request.config,
-        ),
-        complexipy_signals=_run_complexipy_audit(
-            file_args=file_args,
-            raw_dir=scope_state.raw_dir,
-            lookup=scope_state.lookup,
-            config=request.config,
-        ),
-        dead_code_candidates=_run_vulture_audit(
-            file_args=file_args,
-            raw_dir=scope_state.raw_dir,
-            lookup=scope_state.lookup,
-            config=request.config,
-        ),
+        ruff_signals=ruff_signals,
+        lizard_signals=lizard_signals,
+        complexipy_signals=complexipy_signals,
+        dead_code_candidates=dead_code_candidates,
     )
 
 
@@ -661,52 +756,59 @@ def _execute_refactor_audit(
     request: RefactorAuditRunRequest,
     scope_state: AuditScopeState,
     tool_run: AuditToolRunResult,
+    timings: _TimingDiagnostics | None = None,
 ) -> _AuditExecutionResult:
-    hotspots, tool_summaries = _build_hotspots_and_tool_summaries(
-        tool_run=tool_run,
-        config=request.config,
-    )
-    history_summary = _collect_history_summary_for_scope(
-        request=request,
-        scope_state=scope_state,
-    )
-    agent_routing_queue = _build_agent_routing_queue_for_scope(
-        request=request,
-        scope_state=scope_state,
-        hotspots=hotspots,
-        dead_code_candidates=tool_run.dead_code_candidates,
-        history_summary=history_summary,
-    )
-    baseline_report = _load_comparable_baseline_report(
-        request=request,
-        scope_state=scope_state,
-    )
-    baseline_diff = build_baseline_diff(
-        current_hotspots=hotspots,
-        current_dead_code_candidates=tool_run.dead_code_candidates,
-        baseline_report=baseline_report,
-        scope_files=scope_state.current_scope_files,
-        config=request.config,
-    )
-    repo_verdict = build_repo_verdict(
-        hotspots=hotspots,
-        baseline_diff=baseline_diff,
-        agent_routing_queue=agent_routing_queue,
-        history_summary=history_summary,
-    )
-    report = _build_audit_report(
-        _AuditReportContext(
+    with _track_phase(timings, "aggregate_findings"):
+        hotspots, tool_summaries = _build_hotspots_and_tool_summaries(
+            tool_run=tool_run,
+            config=request.config,
+        )
+    with _track_phase(timings, "history_collection"):
+        history_summary = _collect_history_summary_for_scope(
+            request=request,
+            scope_state=scope_state,
+        )
+    with _track_phase(timings, "routing_queue"):
+        agent_routing_queue = _build_agent_routing_queue_for_scope(
             request=request,
             scope_state=scope_state,
             hotspots=hotspots,
             dead_code_candidates=tool_run.dead_code_candidates,
+            history_summary=history_summary,
+        )
+    with _track_phase(timings, "baseline_comparison"):
+        baseline_report = _load_comparable_baseline_report(
+            request=request,
+            scope_state=scope_state,
+        )
+        baseline_diff = build_baseline_diff(
+            current_hotspots=hotspots,
+            current_dead_code_candidates=tool_run.dead_code_candidates,
+            baseline_report=baseline_report,
+            scope_files=scope_state.current_scope_files,
+            config=request.config,
+        )
+    with _track_phase(timings, "repo_verdict"):
+        repo_verdict = build_repo_verdict(
+            hotspots=hotspots,
+            baseline_diff=baseline_diff,
             agent_routing_queue=agent_routing_queue,
             history_summary=history_summary,
-            tool_summaries=tool_summaries,
-            baseline_diff=baseline_diff,
-            repo_verdict=repo_verdict,
         )
-    )
+    with _track_phase(timings, "report_assembly"):
+        report = _build_audit_report(
+            _AuditReportContext(
+                request=request,
+                scope_state=scope_state,
+                hotspots=hotspots,
+                dead_code_candidates=tool_run.dead_code_candidates,
+                agent_routing_queue=agent_routing_queue,
+                history_summary=history_summary,
+                tool_summaries=tool_summaries,
+                baseline_diff=baseline_diff,
+                repo_verdict=repo_verdict,
+            )
+        )
     return _AuditExecutionResult(
         report=report,
         baseline_report=baseline_report,
@@ -759,13 +861,22 @@ def run_refactor_audit(
         )
     )
     try:
-        scope_state = _prepare_audit_scope(resolved_request)
-        tool_run = _run_audit_tools(scope_state, resolved_request)
+        timings = _TimingDiagnostics()
+        with _track_phase(timings, "prepare_scope"):
+            scope_state = _prepare_audit_scope(resolved_request)
+        with _track_phase(timings, "audit_tools"):
+            tool_run = _run_audit_tools(
+                scope_state,
+                resolved_request,
+                timings=timings,
+            )
         execution = _execute_refactor_audit(
             request=resolved_request,
             scope_state=scope_state,
             tool_run=tool_run,
+            timings=timings,
         )
+        execution.report["diagnostics"] = {"timings": timings.as_payload()}
         _write_audit_outputs(out_dir=resolved_request.out_dir, report=execution.report)
         _maybe_update_baseline(
             request=resolved_request,

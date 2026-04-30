@@ -476,6 +476,21 @@ def test_build_baseline_snapshot_resets_diff_and_repo_verdict() -> None:
     assert snapshot["repo_verdict"]["status"] == "strained"
 
 
+def test_build_baseline_snapshot_omits_volatile_timing_diagnostics() -> None:
+    report = make_report(
+        diagnostics={
+            "timings": {
+                "unit": "milliseconds",
+                "phases": {"prepare_scope": {"duration_ms": 3.0}},
+                "tools": {"ruff": {"duration_ms": 4.0}},
+            }
+        }
+    )
+
+    snapshot = audit.build_baseline_snapshot(report)
+
+    assert "diagnostics" not in snapshot
+
 
 def test_build_baseline_snapshot_preserves_out_of_scope_records() -> None:
     baseline_report, report = _partial_scope_snapshot_inputs()

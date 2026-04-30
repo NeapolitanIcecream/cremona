@@ -408,6 +408,7 @@ def build_baseline_snapshot(
     scope_files: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     snapshot = dict(report)
+    snapshot.pop("diagnostics", None)
     scoped_file_set = set(scope_files or [])
     if baseline_report is not None:
         _require_supported_baseline_report(baseline_report)
